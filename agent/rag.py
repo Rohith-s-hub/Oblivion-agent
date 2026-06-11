@@ -31,24 +31,46 @@ INDEXABLE_EXTENSIONS = {
     ".md", ".txt", ".yaml", ".yml", ".toml",
     ".html", ".css", ".json", ".sh", ".sql",
 }
-SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", ".chroma", "venv"}
+SKIP_DIRS = {
+    ".git", "__pycache__", ".venv", "venv", "node_modules", ".chroma",
+    "dist", "build", "target", "out", ".next", ".nuxt",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
+    "coverage", "htmlcov", ".coverage",
+    ".idea", ".vscode", "__MACOSX",
+    "logs", "tmp", "temp", "cache",
+}
+
+SKIP_FILE_PATTERNS = {
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock",
+    "poetry.lock", "Cargo.lock", "Gemfile.lock", "composer.lock",
+}
 MAX_FILE_SIZE = 100_000  # 100KB per file
 
 
 # ── Embeddings via Ollama ─────────────────────────────────────────────────────
-def get_embedding(text: str) -> list[float]:
-    """Get embedding vector for text using local Ollama nomic-embed-text."""
-    try:
-        response = httpx.post(
-            f"{OLLAMA_URL}/api/embeddings",
-            json={"model": EMBED_MODEL, "prompt": text},
-            timeout=30,
-        )
-        response.raise_for_status()
-        return response.json()["embedding"]
-    except Exception as e:
-        print(f"Embedding error: {e}")
-        return []
+def get_embedding(text: str, max_retries: int = 2) -> list[float]:
+    """Get embedding vector with retry + truncation on errors."""
+    if len(text) > 25000:
+        text = text[:25000]
+    for attempt in range(max_retries + 1):
+        try:
+            response = httpx.post(
+                f"{OLLAMA_URL}/api/embeddings",
+                json={"model": EMBED_MODEL, "prompt": text},
+                timeout=60,
+            )
+            response.raise_for_status()
+            return response.json()["embedding"]
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 500 and attempt < max_retries:
+                text = text[:len(text) // 2]
+                continue
+            if attempt == max_retries:
+                return []
+        except Exception:
+            if attempt == max_retries:
+                return []
+    return []
 
 
 # ── Chroma Setup ──────────────────────────────────────────────────────────────
@@ -102,12 +124,19 @@ def chunk_file(content: str, filename: str, max_lines: int = 50) -> list[dict]:
 # ── Indexing ──────────────────────────────────────────────────────────────────
 def should_index(path: Path) -> bool:
     """Check if a file should be indexed."""
+    if path.name in SKIP_FILE_PATTERNS:
+        return False
     if path.suffix not in INDEXABLE_EXTENSIONS:
         return False
     if path.stat().st_size > MAX_FILE_SIZE:
         return False
     if any(part in SKIP_DIRS for part in path.parts):
         return False
+    if ".min." in path.name:
+        return False
+    for part in path.parts:
+        if part.startswith(".") and part not in {".github", ".gitlab"}:
+            return False
     return True
 
 

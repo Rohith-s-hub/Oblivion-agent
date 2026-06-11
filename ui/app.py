@@ -228,8 +228,8 @@ class AgentApp(App):
         self.agent = Agent()
         self.session_id = None
         self.activity_items: list[ActivityItem] = []
-        # Override agent's approval flow for TUI
         self.agent_busy = False
+        self.current_status = "Idle"
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -257,10 +257,11 @@ class AgentApp(App):
     def _status_text(self) -> str:
         msgs = len(self.agent.conversation) if self.agent else 0
         return (
+            f"[bold]{self.current_status}[/bold]  |  "
             f"Session: {self.session_id or '-'}  |  "
-            f"Messages: {msgs}  |  "
-            f"Iteration: {self.iteration_count}  |  "
-            f"Press Ctrl+Q to quit"
+            f"Msgs: {msgs}  |  "
+            f"Step: {self.iteration_count}  |  "
+            f"Ctrl+Q quit"
         )
 
     def update_status(self):
@@ -327,9 +328,16 @@ class AgentApp(App):
         # Clear input
         event.input.value = ""
 
-        # Log user message
+        # Log user message immediately
         log = self.query_one("#chat-log", RichLog)
         log.write(Panel(user_input, title="[bold green]You[/bold green]", border_style="green"))
+
+        # Show immediate "thinking" indicator
+        log.write("[bold yellow]⏳ Agent is thinking...[/bold yellow]")
+
+        # Update status bar
+        self.current_status = "💭 Thinking..."
+        self.update_status()
 
         save_message(self.session_id, "user", user_input)
 
@@ -348,18 +356,26 @@ class AgentApp(App):
 
         for i in range(MAX_ITERATIONS):
             self.iteration_count = i + 1
+            self.current_status = f"🧠 LLM thinking (step {i+1})..."
             self.update_status()
+
+            # Add live spinner activity item
+            spinner = ActivityItem("llm.chat", {"step": i + 1}, "running")
+            await activity_scroll.mount(spinner)
+            activity_scroll.scroll_end(animate=False)
 
             messages = [
                 {"role": "system", "content": self.agent.system_prompt}
             ] + self.agent.conversation
 
-            # Call LLM (non-streaming for simplicity in TUI; stream later)
+            # Call LLM (non-streaming for simplicity; we will stream in next phase)
             try:
                 llm_output = await asyncio.to_thread(
                     self.agent.llm.chat, messages, False
                 )
+                spinner.set_done(f"({len(llm_output)} chars)")
             except Exception as e:
+                spinner.set_done(f"Error: {e}")
                 log.write(f"[red]LLM error: {e}[/red]")
                 break
 
@@ -397,6 +413,10 @@ class AgentApp(App):
                 activity_scroll.scroll_end(animate=False)
                 self.activity_items.append(item)
 
+                # Update status
+                self.current_status = f"🔧 {parsed.tool}..."
+                self.update_status()
+
                 # Special handling for write_file / edit_file / run_bash
                 result = await self._handle_tool(parsed.tool, parsed.args, item)
 
@@ -427,6 +447,7 @@ class AgentApp(App):
 
         self.agent_busy = False
         self.iteration_count = 0
+        self.current_status = "✅ Idle"
         self.update_status()
 
     async def _handle_tool(self, tool_name: str, args: dict, item: ActivityItem) -> str:
