@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+uv.lock
+hello.py
+=3.14
+.DS_Store
+*.swp
+.chroma/
