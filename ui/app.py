@@ -30,6 +30,7 @@ from db.store import init_db, create_session, save_message, load_session, list_s
 from agent.watcher import FileWatcher
 from agent.models import MODELS, get_current_model_info, check_api_key, list_models_table
 from agent.voice import VoiceRecorder, transcribe, get_whisper_model, list_input_devices
+from agent import friday
 import threading
 import numpy as np
 
@@ -68,6 +69,19 @@ SLASH_COMMANDS = [
     ("/voice status", "Show voice settings"),
     ("/voice devices", "List audio input devices"),
     ("/voice model medium", "Switch Whisper model"),
+    ("/friday",                  "F.R.I.D.A.Y. status"),
+    ("/friday on",               "Enable voice replies (FRIDAY mode)"),
+    ("/friday off",              "Disable voice replies"),
+    ("/friday stop",             "Stop current speech"),
+    ("/friday test",             "Test current voice"),
+    ("/friday persona aria",     "Aria - warm professional (default)"),
+    ("/friday persona jenny",    "Jenny - friendly conversational"),
+    ("/friday persona sonia",    "Sonia - British refined"),
+    ("/friday persona natasha",  "Natasha - Australian energetic"),
+    ("/friday persona emma",     "Emma - warm storyteller"),
+    ("/friday persona michelle", "Michelle - mature professional"),
+    ("/friday name boss",        "Change how FRIDAY addresses you"),
+    ("/friday rate +20%",        "Speech rate (+/- percent)"),
     ("/workspace",    "Show / set workspace directory"),
     ("/model",        "List or switch LLM model"),
     ("/model qwen-coder",      "Switch to Qwen3 Coder (free, default)"),
@@ -438,6 +452,14 @@ class OblivionApp(App):
         log.write("")
 
         # System info panel
+        # F.R.I.D.A.Y. greeting
+        if friday.is_enabled():
+            try:
+                greeting = f"Good to see you, {friday.get_name()}. F.R.I.D.A.Y. online and ready."
+                friday.speak(greeting)
+            except Exception:
+                pass
+
         log.write(Panel(
             "[#00ff9f]◢ NEURAL INTERFACE ACTIVE[/#00ff9f]\n\n"
             "[white]Model:[/white]      [#00d9ff]" + os.getenv("DEFAULT_MODEL", "?").split("/")[-1] + "[/#00d9ff]\n"
@@ -823,6 +845,74 @@ class OblivionApp(App):
                 log.write("[#ff006e]Usage: /watch [on|off|status][/#ff006e]")
             return True
 
+        if command == "/friday":
+            from agent import friday as fri
+            if arg == "" or arg == "status":
+                log.write(Panel(
+                    f"[#00ff9f]Enabled:[/#00ff9f] {fri.is_enabled()}\n"
+                    f"[#00ff9f]Voice:[/#00ff9f]    {fri.get_voice()}\n"
+                    f"[#00ff9f]Name:[/#00ff9f]     {fri.get_name()}\n"
+                    f"[#00ff9f]Rate:[/#00ff9f]     {fri.get_rate()}\n"
+                    f"[#00ff9f]Volume:[/#00ff9f]   {fri.get_volume()}\n"
+                    f"\n[dim]Personas:[/dim] {', '.join(fri.VOICES.keys())}",
+                    title="[#b537f2]F.R.I.D.A.Y. STATUS[/#b537f2]",
+                    border_style="#b537f2",
+                ))
+                return True
+            if arg in ("on", "enable"):
+                os.environ["FRIDAY_ENABLED"] = "true"
+                self._update_env("FRIDAY_ENABLED", "true")
+                log.write("[#00ff9f]F.R.I.D.A.Y. enabled.[/#00ff9f]")
+                fri.speak(f"Online, {fri.get_name()}.")
+                return True
+            if arg in ("off", "disable"):
+                os.environ["FRIDAY_ENABLED"] = "false"
+                self._update_env("FRIDAY_ENABLED", "false")
+                fri.stop_speaking()
+                log.write("[#ff006e]F.R.I.D.A.Y. silenced.[/#ff006e]")
+                return True
+            if arg == "stop":
+                fri.stop_speaking()
+                log.write("[dim]Speech interrupted.[/dim]")
+                return True
+            if arg == "test":
+                name = fri.get_name()
+                phrase = f"Good day, {name}. F.R.I.D.A.Y. systems online. Voice {fri.get_voice()} responding."
+                log.write(f"[#00d9ff]🔊 {phrase}[/#00d9ff]")
+                fri.speak(phrase)
+                return True
+            if arg.startswith("persona "):
+                persona = arg.replace("persona ", "", 1).strip().lower()
+                if persona in fri.VOICES:
+                    os.environ["FRIDAY_VOICE"] = persona
+                    self._update_env("FRIDAY_VOICE", persona)
+                    log.write(f"[#00ff9f]Voice persona: {persona} ({fri.VOICES[persona]})[/#00ff9f]")
+                    fri.speak(f"Voice updated, {fri.get_name()}.")
+                else:
+                    log.write(f"[#ff006e]Unknown persona. Try: {', '.join(fri.VOICES.keys())}[/#ff006e]")
+                return True
+            if arg.startswith("name "):
+                new_name = arg.replace("name ", "", 1).strip()
+                if new_name:
+                    os.environ["FRIDAY_NAME"] = new_name
+                    self._update_env("FRIDAY_NAME", new_name)
+                    log.write(f"[#00ff9f]Now calling you: {new_name}[/#00ff9f]")
+                    fri.speak(f"As you wish, {new_name}.")
+                return True
+            if arg.startswith("rate "):
+                rate = arg.replace("rate ", "", 1).strip()
+                if not rate.endswith("%"):
+                    rate = rate + "%"
+                if not (rate.startswith("+") or rate.startswith("-")):
+                    rate = "+" + rate
+                os.environ["FRIDAY_RATE"] = rate
+                self._update_env("FRIDAY_RATE", rate)
+                log.write(f"[#00ff9f]Speech rate: {rate}[/#00ff9f]")
+                fri.speak(f"Speech rate adjusted, {fri.get_name()}.")
+                return True
+            log.write("[#ff006e]Usage: /friday [on|off|stop|test|status|persona <name>|name <text>|rate <±N%>][/#ff006e]")
+            return True
+
         if command == "/voice":
             if arg == "" or arg == "record":
                 # Same as F2
@@ -872,6 +962,11 @@ class OblivionApp(App):
             self._stop_watcher()
             if self.voice_stop_event is not None:
                 self.voice_stop_event.set()
+            try:
+                from agent import friday as fri
+                fri.stop_speaking()
+            except Exception:
+                pass
             self.exit()
             return True
 
@@ -1066,6 +1161,19 @@ class OblivionApp(App):
                     border_style="#00ff9f",
                 ))
                 save_message(self.session_id, "assistant", parsed.content)
+                # F.R.I.D.A.Y. speaks the answer (summarized + conversational)
+                if friday.is_enabled():
+                    def speak_summary():
+                        try:
+                            spoken = friday.summarize_for_speech(
+                                parsed.content, llm_client=self.agent.llm
+                            )
+                            if spoken:
+                                self.call_from_thread(self._show_friday_speech, spoken)
+                                friday.speak(spoken, blocking=True)
+                        except Exception as e:
+                            print(f"FRIDAY error: {e}")
+                    threading.Thread(target=speak_summary, daemon=True).start()
                 break
 
             if isinstance(parsed, ToolCall):
@@ -1077,6 +1185,16 @@ class OblivionApp(App):
                     summary = parsed.args.get("summary", "Done.")
                     log.write(Panel(summary, title="[#00ff9f]◢ DONE[/#00ff9f]", border_style="#00ff9f"))
                     save_message(self.session_id, "assistant", summary)
+                    if friday.is_enabled():
+                        def speak_done():
+                            try:
+                                spoken = friday.summarize_for_speech(summary, llm_client=self.agent.llm)
+                                if spoken:
+                                    self.call_from_thread(self._show_friday_speech, spoken)
+                                    friday.speak(spoken, blocking=True)
+                            except Exception as e:
+                                print(f"FRIDAY error: {e}")
+                        threading.Thread(target=speak_done, daemon=True).start()
                     break
 
                 item = ActivityItem(parsed.tool, parsed.args, "running")
@@ -1258,6 +1376,29 @@ class OblivionApp(App):
         """Called when transcription completes. Fills input box."""
         # Schedule UI update on main thread
         self.call_from_thread(self._apply_transcription, text)
+
+    def _show_friday_speech(self, text: str):
+        """Show what FRIDAY is speaking in a small cyan panel."""
+        try:
+            log = self.query_one("#chat-log", RichLog)
+            log.write(Panel(
+                f"[italic #00d9ff]🔊 {text}[/italic #00d9ff]",
+                title="[#00d9ff]F.R.I.D.A.Y.[/#00d9ff]",
+                border_style="#00d9ff",
+            ))
+        except Exception:
+            pass
+
+    def _update_env(self, key: str, value: str):
+        """Persist a key=value to .env file."""
+        env_path = Path.home() / "ai-agent" / ".env"
+        if not env_path.exists():
+            env_path.write_text(f"{key}={value}\n")
+            return
+        lines = env_path.read_text().splitlines()
+        new_lines = [l for l in lines if not l.startswith(f"{key}=")]
+        new_lines.append(f"{key}={value}")
+        env_path.write_text("\n".join(new_lines) + "\n")
 
     def _apply_transcription(self, text: str):
         log = self.query_one("#chat-log", RichLog)
