@@ -29,6 +29,9 @@ from tools.diff import make_diff
 from db.store import init_db, create_session, save_message, load_session, list_sessions
 from agent.watcher import FileWatcher
 from agent.models import MODELS, get_current_model_info, check_api_key, list_models_table
+from agent.voice import VoiceRecorder, transcribe, get_whisper_model, list_input_devices
+import threading
+import numpy as np
 
 
 # ── Cyberpunk ASCII Banner ────────────────────────────────────────────────────
@@ -60,6 +63,11 @@ SLASH_COMMANDS = [
     ("/index status", "Show current chunk count"),
     ("/watch",        "Toggle file watcher (auto-reindex)"),
     ("/watch status", "Show watcher status"),
+    ("/voice",        "Start voice recording (same as F2)"),
+    ("/voice record", "Same as F2 — start recording"),
+    ("/voice status", "Show voice settings"),
+    ("/voice devices", "List audio input devices"),
+    ("/voice model medium", "Switch Whisper model"),
     ("/workspace",    "Show / set workspace directory"),
     ("/model",        "List or switch LLM model"),
     ("/model qwen-coder",      "Switch to Qwen3 Coder (free, default)"),
@@ -290,6 +298,7 @@ class OblivionApp(App):
         Binding("ctrl+n", "new_session", "New"),
         Binding("ctrl+l", "clear_chat", "Clear"),
         Binding("ctrl+h", "show_help", "Help"),
+        Binding("ctrl+t", "toggle_voice", "Talk"),
     ]
 
     TITLE = "◢◤ OBLIVION ◥◣"
@@ -310,6 +319,12 @@ class OblivionApp(App):
         self.watcher: FileWatcher | None = None
         self.auto_watch_enabled = True
         self._watcher_events: list = []
+        # Voice state
+        self.voice_recorder: VoiceRecorder | None = None
+        self.voice_recording = False
+        self.voice_stop_event: threading.Event | None = None
+        self.voice_audio_level = 0.0
+        self.voice_status = "idle"
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -328,7 +343,7 @@ class OblivionApp(App):
                     yield Label("[bold #b537f2]◢ FILESYSTEM ◣[/bold #b537f2]")
                     yield Tree("◆ root/", id="workspace-tree")
 
-        yield Input(placeholder="◢ Enter command or /help for slash commands…", id="input-box")
+        yield Input(placeholder="◢ Enter command, /help, or Ctrl+T to talk…", id="input-box")
         yield OptionList(id="slash-suggestions")
         yield Static(self._status_text(), id="status-bar")
         yield Footer()
@@ -808,8 +823,55 @@ class OblivionApp(App):
                 log.write("[#ff006e]Usage: /watch [on|off|status][/#ff006e]")
             return True
 
+        if command == "/voice":
+            if arg == "" or arg == "record":
+                # Same as F2
+                self.action_toggle_voice()
+                return True
+            if arg == "devices":
+                devices = list_input_devices()
+                lines = [
+                    f"{'★' if d['default'] else ' '} [{d['index']}] {d['name']} ({d['channels']} ch)"
+                    for d in devices
+                ]
+                log.write(Panel(
+                    "\n".join(lines) or "[dim]No input devices found.[/dim]",
+                    title="[#b537f2]AUDIO INPUT DEVICES[/#b537f2]",
+                    border_style="#b537f2",
+                ))
+                return True
+            if arg.startswith("model "):
+                model_name = arg.replace("model ", "", 1).strip()
+                from agent import voice
+                voice.clear_model()
+                env_path = Path.home() / "ai-agent" / ".env"
+                if env_path.exists():
+                    lines = env_path.read_text().splitlines()
+                    new_lines = [l for l in lines if not l.startswith("VOICE_MODEL=")]
+                    new_lines.append(f"VOICE_MODEL={model_name}")
+                    env_path.write_text("\n".join(new_lines) + "\n")
+                os.environ["VOICE_MODEL"] = model_name
+                log.write(f"[#00ff9f]✓ Whisper model set to: {model_name}[/#00ff9f]")
+                log.write("[dim]Will load on next voice recording.[/dim]")
+                return True
+            if arg == "status":
+                current_model = os.getenv("VOICE_MODEL", "small")
+                log.write(Panel(
+                    f"[#00ff9f]Whisper model:[/#00ff9f]  {current_model}\n"
+                    f"[#00ff9f]Status:[/#00ff9f]         {self.voice_status}\n"
+                    f"[#00ff9f]Recording:[/#00ff9f]      {'YES' if self.voice_recording else 'no'}\n"
+                    f"[#00ff9f]Hotkey:[/#00ff9f]         F2 (start / stop)",
+                    title="[#b537f2]VOICE STATUS[/#b537f2]",
+                    border_style="#b537f2",
+                ))
+                return True
+            log.write("[#ff006e]Usage: /voice [record|devices|status|model <name>][/#ff006e]")
+            return True
+
         if command == "/quit":
             self._stop_watcher()
+            if self.voice_stop_event is not None:
+                self.voice_stop_event.set()
             self.exit()
             return True
 
@@ -1119,6 +1181,118 @@ class OblivionApp(App):
     def action_show_help(self) -> None:
         self.run_worker(self.handle_slash("/help"), exclusive=False)
 
+    def action_toggle_voice(self) -> None:
+        """F2 hotkey - start/stop voice recording."""
+        if self.voice_recording:
+            # Stop current recording
+            self._stop_voice_recording()
+        else:
+            # Start new recording
+            self.run_worker(self._start_voice_recording(), exclusive=False)
+
+    async def _start_voice_recording(self):
+        """Begin recording audio. Uses pure threads to avoid Textual worker conflicts."""
+        log = self.query_one("#chat-log", RichLog)
+
+        # Start recording IMMEDIATELY (Whisper loads on transcription end)
+        self.voice_recording = True
+        self.voice_status = "recording"
+        self.voice_stop_event = threading.Event()
+        self.current_status = "RECORDING (Ctrl+T to stop)"
+        self.update_status()
+
+        log.write(Panel(
+            "[bold #ff006e]>>> RECORDING <<<[/bold #ff006e]\n"
+            "Speak now... press [bold #00ff9f]Ctrl+T[/bold #00ff9f] again to STOP",
+            title="[#ff006e]VOICE INPUT[/#ff006e]",
+            border_style="#ff006e",
+        ))
+
+        def on_level(rms):
+            self.voice_audio_level = rms
+
+        def on_status(s):
+            self.voice_status = s
+
+        # All recording + transcription in one background thread
+        # Whisper is already pre-loaded by main() before Textual starts
+        def record_thread():
+            try:
+                recorder = VoiceRecorder(on_level=on_level, on_status=on_status)
+                self.voice_recorder = recorder
+
+                # Watch for stop event
+                def watch_stop():
+                    self.voice_stop_event.wait()
+                    recorder.stop()
+                threading.Thread(target=watch_stop, daemon=True).start()
+
+                audio = recorder.record_until_stopped()
+
+                if len(audio) == 0:
+                    self.call_from_thread(self._apply_transcription, "")
+                    return
+
+                self.voice_status = "transcribing"
+                text = transcribe(audio)
+                self.call_from_thread(self._apply_transcription, text)
+            except Exception as e:
+                self.call_from_thread(
+                    self._apply_transcription, f"__ERROR__:{e}"
+                )
+
+        threading.Thread(target=record_thread, daemon=True).start()
+
+    def _stop_voice_recording(self):
+        """Stop the current recording (called by F2 while recording)."""
+        if self.voice_stop_event is not None:
+            self.voice_stop_event.set()
+        self.voice_recording = False
+        self.current_status = "TRANSCRIBING"
+        self.update_status()
+
+        log = self.query_one("#chat-log", RichLog)
+        log.write("[#00d9ff]>>> Transcribing audio... <<<[/#00d9ff]")
+
+    def _on_voice_done(self, text: str):
+        """Called when transcription completes. Fills input box."""
+        # Schedule UI update on main thread
+        self.call_from_thread(self._apply_transcription, text)
+
+    def _apply_transcription(self, text: str):
+        log = self.query_one("#chat-log", RichLog)
+        input_widget = self.query_one("#input-box", Input)
+
+        self.voice_recording = False
+        self.voice_recorder = None
+        self.current_status = "READY"
+        self.update_status()
+
+        if text.startswith("__ERROR__:"):
+            err = text[len("__ERROR__:"):]
+            log.write(Panel(
+                f"[#ff006e]Voice error: {err}[/#ff006e]",
+                border_style="#ff006e",
+            ))
+            return
+
+        if not text.strip():
+            log.write("[dim]No speech detected.[/dim]")
+            return
+
+        # Fill input box with transcription (user reviews + presses Enter)
+        input_widget.value = text.strip()
+        input_widget.cursor_position = len(input_widget.value)
+        input_widget.focus()
+
+        log.write(Panel(
+            f"[#00ff9f]\"{text.strip()}\"[/#00ff9f]\n\n"
+            "[dim]Review the text above and press [bold #00ff9f]Enter[/bold #00ff9f] to submit, "
+            "or edit it first.[/dim]",
+            title="[#00ff9f]◢ TRANSCRIBED ◣[/#00ff9f]",
+            border_style="#00ff9f",
+        ))
+
     def _clear_activity(self):
         for item in list(self.activity_items):
             try:
@@ -1129,6 +1303,19 @@ class OblivionApp(App):
 
 
 def main():
+    # Pre-load Whisper model BEFORE Textual takes over the terminal.
+    # This avoids multiprocessing/fds_to_keep errors when loading inside async.
+    import os
+    if os.getenv("OBLIVION_PRELOAD_VOICE", "1") == "1":
+        try:
+            print("[Oblivion] Pre-loading Whisper model (one-time)...")
+            from agent.voice import get_whisper_model
+            get_whisper_model()
+            print("[Oblivion] Voice ready.")
+        except Exception as e:
+            print(f"[Oblivion] Voice unavailable: {e}")
+            print("[Oblivion] (Continuing without voice - text input still works)")
+
     app = OblivionApp()
     app.run()
 
