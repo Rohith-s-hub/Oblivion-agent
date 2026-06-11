@@ -20,6 +20,7 @@ dependencies = [
     "numpy>=2.4.6",
     "scipy>=1.17.1",
     "edge-tts>=7.2.8",
+    "elevenlabs>=2.52.0",
 ]
 
 [build-system]
