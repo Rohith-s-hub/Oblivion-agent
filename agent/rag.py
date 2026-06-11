@@ -1,32 +1,32 @@
 """
-RAG (Retrieval Augmented Generation) for the AI agent.
-Indexes the codebase and lets the agent search semantically.
+RAG with incremental indexing.
 
-Uses:
-  - Ollama nomic-embed-text for embeddings (local, fast, parallel)
-  - ChromaDB for vector storage (embedded, no server)
+Tracks file hashes in ~/.ai-agent/file_hashes.json.
+Only re-embeds files whose content has changed.
 """
 import os
+import json
 import hashlib
-import asyncio
 from pathlib import Path
-from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
+
 import chromadb
 from chromadb.config import Settings
 import httpx
 from dotenv import load_dotenv
-from concurrent.futures import ThreadPoolExecutor
 
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 WORKSPACE = Path(os.getenv("WORKSPACE_DIR", ".")).expanduser().resolve()
 INDEX_DIR = Path.home() / ".ai-agent" / "chroma"
+HASH_FILE = Path.home() / ".ai-agent" / "file_hashes.json"
 EMBED_MODEL = os.getenv("EMBED_MODEL", "all-minilm")
 OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 PARALLEL_EMBEDDINGS = int(os.getenv("PARALLEL_EMBEDDINGS", "8"))
 
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
+HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 INDEXABLE_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".vue",
@@ -51,9 +51,27 @@ SKIP_FILE_PATTERNS = {
 MAX_FILE_SIZE = 100_000
 
 
-# ── Embeddings (single + batch) ───────────────────────────────────────────────
+# ── Hash tracking ─────────────────────────────────────────────────────────────
+def _load_hashes() -> dict:
+    """Load saved file hashes per workspace."""
+    if not HASH_FILE.exists():
+        return {}
+    try:
+        return json.loads(HASH_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _save_hashes(hashes: dict) -> None:
+    HASH_FILE.write_text(json.dumps(hashes, indent=2))
+
+
+def file_hash(content: str) -> str:
+    return hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
+
+
+# ── Embeddings ────────────────────────────────────────────────────────────────
 def get_embedding(text: str, max_retries: int = 2) -> list[float]:
-    """Get embedding vector with retry + truncation on errors."""
     if len(text) > 25000:
         text = text[:25000]
     for attempt in range(max_retries + 1):
@@ -78,13 +96,12 @@ def get_embedding(text: str, max_retries: int = 2) -> list[float]:
 
 
 def get_embeddings_parallel(texts: list[str], max_workers: int = None) -> list[list[float]]:
-    """Get embeddings for multiple texts in parallel using a thread pool."""
     workers = max_workers or PARALLEL_EMBEDDINGS
     with ThreadPoolExecutor(max_workers=workers) as executor:
         return list(executor.map(get_embedding, texts))
 
 
-# ── Chroma Setup ──────────────────────────────────────────────────────────────
+# ── Chroma ────────────────────────────────────────────────────────────────────
 _client = None
 _collection = None
 
@@ -121,7 +138,6 @@ def chunk_file(content: str, filename: str, max_lines: int = 50) -> list[dict]:
                 "file": filename,
             })
         i += max_lines - overlap
-
     return chunks
 
 
@@ -145,32 +161,124 @@ def should_index(path: Path) -> bool:
     return True
 
 
-def file_hash(content: str) -> str:
-    return hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
+# ── Per-file indexing (used by both full + watcher) ──────────────────────────
+def _delete_chunks_for_file(collection, rel_path: str) -> int:
+    """Remove all existing chunks for a file before re-indexing it."""
+    try:
+        existing = collection.get(where={"file": rel_path})
+        if existing and existing.get("ids"):
+            collection.delete(ids=existing["ids"])
+            return len(existing["ids"])
+    except Exception:
+        pass
+    return 0
 
 
-# ── Indexing (parallel) ───────────────────────────────────────────────────────
-def index_codebase(root: Path = None, verbose: bool = True) -> dict:
+def index_single_file(filepath: Path, root: Path = None) -> dict:
     """
-    Walk the codebase, chunk files, embed in PARALLEL, and store in Chroma.
+    Index ONE file (used by file watcher).
+    Returns {chunks_added, deleted, status}.
     """
     root = root or WORKSPACE
     collection = get_collection()
-    stats = {"files_scanned": 0, "files_indexed": 0, "chunks_added": 0, "skipped": 0}
+    rel_path = str(filepath.relative_to(root))
 
-    # ── PHASE 1: Collect all chunks ───────────────────────────────────────────
-    all_chunks = []  # list of (chunk_id, text, metadata)
+    # File deleted?
+    if not filepath.exists():
+        deleted = _delete_chunks_for_file(collection, rel_path)
+        hashes = _load_hashes()
+        ws_key = str(root)
+        if ws_key in hashes and rel_path in hashes[ws_key]:
+            del hashes[ws_key][rel_path]
+            _save_hashes(hashes)
+        return {"status": "deleted", "deleted": deleted, "chunks_added": 0}
+
+    # Skip ignored files
+    if not should_index(filepath):
+        return {"status": "skipped", "deleted": 0, "chunks_added": 0}
+
+    try:
+        content = filepath.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return {"status": "error", "deleted": 0, "chunks_added": 0}
+
+    # Check hash - unchanged?
+    h = file_hash(content)
+    hashes = _load_hashes()
+    ws_key = str(root)
+    if ws_key not in hashes:
+        hashes[ws_key] = {}
+
+    if hashes[ws_key].get(rel_path) == h:
+        return {"status": "unchanged", "deleted": 0, "chunks_added": 0}
+
+    # Changed - delete old chunks + re-embed
+    deleted = _delete_chunks_for_file(collection, rel_path)
+    chunks = chunk_file(content, rel_path)
+    if not chunks:
+        hashes[ws_key][rel_path] = h
+        _save_hashes(hashes)
+        return {"status": "empty", "deleted": deleted, "chunks_added": 0}
+
+    texts = [c["text"] for c in chunks]
+    embeddings = get_embeddings_parallel(texts)
+
+    ids, embs, docs, metas = [], [], [], []
+    for chunk, emb in zip(chunks, embeddings):
+        if emb:
+            ids.append(f"{rel_path}::{chunk['start_line']}-{chunk['end_line']}")
+            embs.append(emb)
+            docs.append(chunk["text"])
+            metas.append({
+                "file": rel_path,
+                "start_line": chunk["start_line"],
+                "end_line": chunk["end_line"],
+            })
+
+    if ids:
+        collection.upsert(ids=ids, embeddings=embs, documents=docs, metadatas=metas)
+
+    hashes[ws_key][rel_path] = h
+    _save_hashes(hashes)
+
+    return {"status": "indexed", "deleted": deleted, "chunks_added": len(ids)}
+
+
+# ── Full indexing (incremental) ───────────────────────────────────────────────
+def index_codebase(root: Path = None, verbose: bool = True, force: bool = False) -> dict:
+    """
+    Walk codebase and index only CHANGED files (via hash comparison).
+    Pass force=True to re-embed everything regardless.
+    """
+    root = root or WORKSPACE
+    collection = get_collection()
+    stats = {
+        "files_scanned": 0, "files_indexed": 0, "files_unchanged": 0,
+        "chunks_added": 0, "skipped": 0, "deleted": 0,
+    }
+
+    hashes = _load_hashes()
+    ws_key = str(root)
+    if ws_key not in hashes:
+        hashes[ws_key] = {}
+
+    if force:
+        if verbose:
+            print("⚡ Force mode: re-embedding everything")
+        hashes[ws_key] = {}
+
+    # Collect chunks that need embedding
+    to_embed = []  # list of (chunk_id, text, metadata)
+    files_changed = []
 
     if verbose:
         print(f"📂 Scanning files...")
 
     for filepath in root.rglob("*"):
-        if not filepath.is_file():
+        if not filepath.is_file() or not should_index(filepath):
             continue
-        if not should_index(filepath):
-            continue
-
         stats["files_scanned"] += 1
+
         try:
             content = filepath.read_text(encoding="utf-8", errors="ignore")
         except Exception:
@@ -178,73 +286,78 @@ def index_codebase(root: Path = None, verbose: bool = True) -> dict:
             continue
 
         rel_path = str(filepath.relative_to(root))
-        chunks = chunk_file(content, rel_path)
+        h = file_hash(content)
 
+        # Hash unchanged? Skip.
+        if hashes[ws_key].get(rel_path) == h:
+            stats["files_unchanged"] += 1
+            continue
+
+        # Changed - delete old chunks for this file
+        deleted = _delete_chunks_for_file(collection, rel_path)
+        stats["deleted"] += deleted
+
+        # Add new chunks to embed queue
+        chunks = chunk_file(content, rel_path)
         for chunk in chunks:
             chunk_id = f"{rel_path}::{chunk['start_line']}-{chunk['end_line']}"
-            all_chunks.append((
+            to_embed.append((
                 chunk_id,
                 chunk["text"],
-                {
-                    "file": rel_path,
-                    "start_line": chunk["start_line"],
-                    "end_line": chunk["end_line"],
-                },
+                {"file": rel_path, "start_line": chunk["start_line"], "end_line": chunk["end_line"]},
             ))
 
-    if verbose:
-        print(f"📊 Collected {len(all_chunks)} chunks from {stats['files_scanned']} files")
-        print(f"🚀 Embedding in parallel (workers={PARALLEL_EMBEDDINGS})...")
+        hashes[ws_key][rel_path] = h
+        files_changed.append(rel_path)
 
-    if not all_chunks:
-        return stats
-
-    # ── PHASE 2: Embed all chunks in parallel ─────────────────────────────────
-    BATCH = 32  # process in batches to avoid memory spikes
-    total_batches = (len(all_chunks) + BATCH - 1) // BATCH
-
-    for batch_idx in range(total_batches):
-        batch = all_chunks[batch_idx * BATCH:(batch_idx + 1) * BATCH]
-        texts = [c[1] for c in batch]
-
-        embeddings = get_embeddings_parallel(texts)
-
-        # Filter out failed embeddings
-        ids, embs, docs, metas = [], [], [], []
-        for (chunk_id, text, meta), emb in zip(batch, embeddings):
-            if emb:
-                ids.append(chunk_id)
-                embs.append(emb)
-                docs.append(text)
-                metas.append(meta)
-            else:
-                stats["skipped"] += 1
-
-        if ids:
-            try:
-                collection.upsert(
-                    ids=ids,
-                    embeddings=embs,
-                    documents=docs,
-                    metadatas=metas,
-                )
-                stats["chunks_added"] += len(ids)
-            except Exception as e:
-                if verbose:
-                    print(f"  ✗ Batch error: {e}")
-                stats["skipped"] += len(ids)
-
+    # Detect deleted files - remove their chunks
+    indexed_files = set(hashes[ws_key].keys())
+    on_disk = {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file() and should_index(p)}
+    removed_files = indexed_files - on_disk
+    for rel in removed_files:
+        deleted = _delete_chunks_for_file(collection, rel)
+        stats["deleted"] += deleted
+        del hashes[ws_key][rel]
         if verbose:
-            done = min((batch_idx + 1) * BATCH, len(all_chunks))
-            pct = done / len(all_chunks) * 100
-            print(f"  [{batch_idx+1}/{total_batches}] {done}/{len(all_chunks)} chunks ({pct:.0f}%)")
+            print(f"  🗑️  Removed deleted file: {rel}")
 
-    # Count files that had at least one chunk indexed successfully
-    indexed_files = set()
-    for cid, _, meta in all_chunks:
-        indexed_files.add(meta["file"])
-    stats["files_indexed"] = len(indexed_files)
+    if verbose:
+        print(f"📊 {len(files_changed)} files changed, {stats['files_unchanged']} unchanged")
+        if not to_embed:
+            print("✓ Nothing to embed - everything up to date!")
 
+    if to_embed:
+        if verbose:
+            print(f"🚀 Embedding {len(to_embed)} chunks in parallel (workers={PARALLEL_EMBEDDINGS})...")
+
+        BATCH = 32
+        total_batches = (len(to_embed) + BATCH - 1) // BATCH
+
+        for batch_idx in range(total_batches):
+            batch = to_embed[batch_idx * BATCH:(batch_idx + 1) * BATCH]
+            texts = [c[1] for c in batch]
+            embeddings = get_embeddings_parallel(texts)
+
+            ids, embs, docs, metas = [], [], [], []
+            for (cid, text, meta), emb in zip(batch, embeddings):
+                if emb:
+                    ids.append(cid)
+                    embs.append(emb)
+                    docs.append(text)
+                    metas.append(meta)
+                else:
+                    stats["skipped"] += 1
+
+            if ids:
+                collection.upsert(ids=ids, embeddings=embs, documents=docs, metadatas=metas)
+                stats["chunks_added"] += len(ids)
+
+            if verbose:
+                done = min((batch_idx + 1) * BATCH, len(to_embed))
+                print(f"  [{batch_idx+1}/{total_batches}] {done}/{len(to_embed)} ({done/len(to_embed)*100:.0f}%)")
+
+    stats["files_indexed"] = len(files_changed)
+    _save_hashes(hashes)
     return stats
 
 
@@ -274,9 +387,13 @@ def search_code(query: str, n_results: int = 5) -> list[dict]:
 
 def index_stats() -> dict:
     collection = get_collection()
+    hashes = _load_hashes()
+    ws_key = str(WORKSPACE)
     return {
         "total_chunks": collection.count(),
+        "tracked_files": len(hashes.get(ws_key, {})),
         "index_path": str(INDEX_DIR),
+        "hash_file": str(HASH_FILE),
     }
 
 
@@ -289,4 +406,12 @@ def clear_index():
     except Exception:
         pass
     _collection = None
+
+    # Clear hashes for this workspace
+    hashes = _load_hashes()
+    ws_key = str(WORKSPACE)
+    if ws_key in hashes:
+        del hashes[ws_key]
+        _save_hashes(hashes)
+
     return "Index cleared."

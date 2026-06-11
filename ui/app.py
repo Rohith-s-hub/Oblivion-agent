@@ -27,6 +27,8 @@ from agent.parser import parse_llm_output, ToolCall, FinalAnswer
 from tools.registry import dispatch
 from tools.diff import make_diff
 from db.store import init_db, create_session, save_message, load_session, list_sessions
+from agent.watcher import FileWatcher
+from agent.models import MODELS, get_current_model_info, check_api_key, list_models_table
 
 
 # ── Cyberpunk ASCII Banner ────────────────────────────────────────────────────
@@ -52,17 +54,24 @@ ACCENT_COLORS = ["#00ff9f", "#00d9ff", "#b537f2", "#ff006e"]
 
 
 SLASH_COMMANDS = [
-    ("/help",       "Show all slash commands"),
-    ("/clear",      "Clear chat history"),
-    ("/index",      "Re-index current workspace"),
+    ("/help",         "Show all slash commands"),
+    ("/clear",        "Clear chat history"),
+    ("/index",        "Re-index changed files (incremental)"),
     ("/index status", "Show current chunk count"),
-    ("/workspace",  "Show / set workspace directory"),
-    ("/model",      "Show / set LLM model"),
-    ("/save",       "Save current session"),
-    ("/load",       "Resume a saved session"),
-    ("/sessions",   "List all saved sessions"),
-    ("/stats",      "Show conversation stats"),
-    ("/quit",       "Exit Oblivion"),
+    ("/watch",        "Toggle file watcher (auto-reindex)"),
+    ("/watch status", "Show watcher status"),
+    ("/workspace",    "Show / set workspace directory"),
+    ("/model",        "List or switch LLM model"),
+    ("/model qwen-coder",      "Switch to Qwen3 Coder (free, default)"),
+    ("/model groq-llama",      "Switch to Groq Llama 3.3 (free, BLAZING)"),
+    ("/model groq-deepseek",   "Switch to Groq DeepSeek R1 (free, thinking)"),
+    ("/model claude-sonnet",   "Switch to Claude Sonnet 4 (paid, best)"),
+    ("/model deepseek",        "Switch to DeepSeek (cheap, smart)"),
+    ("/save",         "Save current session"),
+    ("/load",         "Resume a saved session"),
+    ("/sessions",     "List all saved sessions"),
+    ("/stats",        "Show conversation stats"),
+    ("/quit",         "Exit Oblivion"),
 ]
 
 
@@ -298,6 +307,9 @@ class OblivionApp(App):
         self._pulse_idx = 0
         self._spinner_idx = 0
         self._accent_idx = 0
+        self.watcher: FileWatcher | None = None
+        self.auto_watch_enabled = True
+        self._watcher_events: list = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -324,9 +336,13 @@ class OblivionApp(App):
     def _status_text(self) -> str:
         msgs = len(self.agent.conversation) if self.agent else 0
         workspace = os.path.basename(os.getenv("WORKSPACE_DIR", ".")) or "/"
-        model = os.getenv("DEFAULT_MODEL", "qwen3-coder:480b-cloud").split("/")[-1][:25]
 
-        # Pulsing dot when busy, static when idle
+        # Get model info with provider color
+        model_info = get_current_model_info()
+        model_label = model_info["name"]
+        model_color = model_info["color"]
+
+        # Pulse when busy
         if self.agent_busy:
             self._pulse_idx = (self._pulse_idx + 1) % len(PULSE_FRAMES)
             pulse = f"[#ff006e]{PULSE_FRAMES[self._pulse_idx]}[/#ff006e]"
@@ -335,10 +351,15 @@ class OblivionApp(App):
             pulse = "[#00ff9f]●[/#00ff9f]"
             status_color = "#00ff9f"
 
+        # Paid model warning
+        paid_warn = ""
+        if "$" in model_info.get("cost", ""):
+            paid_warn = " [bold #ff006e]💰[/bold #ff006e]"
+
         return (
             f"{pulse} [bold {status_color}]{self.current_status}[/bold {status_color}]"
             f"  [dim]│[/dim]  [#00d9ff]◆ {workspace}[/#00d9ff]"
-            f"  [dim]│[/dim]  [#b537f2]⬢ {model}[/#b537f2]"
+            f"  [dim]│[/dim]  [bold {model_color}]⬢ {model_label}[/bold {model_color}]{paid_warn}"
             f"  [dim]│[/dim]  [#ff006e]session {self.session_id or '-'}[/#ff006e]"
             f"  [dim]│[/dim]  msg {msgs}  step {self.iteration_count}"
             f"  [dim]│[/dim]  [dim]^Q quit ^H help[/dim]"
@@ -358,6 +379,13 @@ class OblivionApp(App):
 
         # Drive animations - 100ms tick rate (10fps)
         self.set_interval(0.1, self._animate_tick)
+
+        # Start file watcher
+        if self.auto_watch_enabled:
+            self._start_watcher()
+
+        # Process watcher events every 500ms
+        self.set_interval(0.5, self._drain_watcher_events)
 
         log = self.query_one("#chat-log", RichLog)
 
@@ -411,14 +439,72 @@ class OblivionApp(App):
 
     def _animate_tick(self) -> None:
         """Called every 100ms to drive animations."""
-        # Refresh status bar (drives pulse)
         if self.agent_busy:
             self.update_status()
-
-        # Refresh running activity items (drives spinners)
         for item in self.activity_items:
             if item.status == "running" or item.status == "pending":
                 item.update_display()
+
+    def _start_watcher(self):
+        """Start file watcher for current workspace."""
+        if self.watcher is not None:
+            self.watcher.stop()
+        self.watcher = FileWatcher(callback=self._on_file_event)
+        self.watcher.start()
+
+    def _stop_watcher(self):
+        if self.watcher is not None:
+            self.watcher.stop()
+            self.watcher = None
+
+    def _on_file_event(self, evt: dict):
+        """Callback from file watcher (runs in background thread).
+        We queue the event; the UI thread drains it via _drain_watcher_events."""
+        self._watcher_events.append(evt)
+
+    def _drain_watcher_events(self):
+        """Show file change events in the activity panel."""
+        if not self._watcher_events:
+            return
+
+        try:
+            scroll = self.query_one("#activity-scroll", VerticalScroll)
+        except Exception:
+            return
+
+        while self._watcher_events:
+            evt = self._watcher_events.pop(0)
+            etype = evt.get("type", "?")
+            fname = evt.get("file", "?")
+            status = evt.get("status", "?")
+
+            # Only show interesting events
+            if status in ("unchanged", "skipped"):
+                continue
+
+            icons = {"modified": "✎", "created": "✚", "deleted": "✗", "error": "⚠"}
+            colors = {"modified": "#00d9ff", "created": "#00ff9f", "deleted": "#ff006e", "error": "#ff006e"}
+            icon = icons.get(etype, "·")
+            color = colors.get(etype, "white")
+
+            short = Path(fname).name if fname else "?"
+            detail = ""
+            if evt.get("chunks_added"):
+                detail = f" [dim](+{evt['chunks_added']} chunks)[/dim]"
+            elif evt.get("deleted"):
+                detail = f" [dim](-{evt['deleted']} chunks)[/dim]"
+            if evt.get("error"):
+                detail = f" [red]{evt['error'][:40]}[/red]"
+
+            item = Static(f"[{color}]{icon}[/{color}] [dim]auto-index:[/dim] [bold]{short}[/bold]{detail}")
+            try:
+                self.run_worker(self._mount_watcher_item(scroll, item), exclusive=False)
+            except Exception:
+                pass
+
+    async def _mount_watcher_item(self, scroll, item):
+        await scroll.mount(item)
+        scroll.scroll_end(animate=False)
 
     def _populate_tree(self):
         tree = self.query_one("#workspace-tree", Tree)
@@ -492,19 +578,32 @@ class OblivionApp(App):
                     title="[#b537f2]INDEX STATUS[/#b537f2]",
                     border_style="#b537f2",
                 ))
-            else:
-                log.write("[#ff006e]◢ Re-indexing workspace... (this may take a minute)[/#ff006e]")
-                self.current_status = "▓ INDEXING"
+            elif arg == "force":
+                log.write("[#ff006e]◢ Force re-indexing entire workspace...[/#ff006e]")
+                self.current_status = "INDEXING"
                 self.update_status()
-                from agent.rag import index_codebase, clear_index
-                clear_index()
-                stats = await asyncio.to_thread(index_codebase, None, False)
-                self.current_status = "▓ READY"
+                from agent.rag import index_codebase
+                stats = await asyncio.to_thread(index_codebase, None, False, True)
+                self.current_status = "READY"
                 self.update_status()
                 log.write(Panel(
-                    f"[#00ff9f]✓ Indexed[/#00ff9f] {stats['files_indexed']} files, "
-                    f"{stats['chunks_added']} chunks "
-                    f"([#ff006e]{stats['skipped']} skipped[/#ff006e])",
+                    f"[#00ff9f]✓ Full reindex:[/#00ff9f] {stats['files_indexed']} files, "
+                    f"{stats['chunks_added']} chunks",
+                    border_style="#00ff9f",
+                ))
+            else:
+                log.write("[#00d9ff]◢ Incremental indexing (only changed files)...[/#00d9ff]")
+                self.current_status = "INDEXING"
+                self.update_status()
+                from agent.rag import index_codebase
+                stats = await asyncio.to_thread(index_codebase, None, False, False)
+                self.current_status = "READY"
+                self.update_status()
+                log.write(Panel(
+                    f"[#00ff9f]✓ {stats['files_indexed']} changed[/#00ff9f]  "
+                    f"[dim]{stats['files_unchanged']} unchanged[/dim]  "
+                    f"[#00d9ff]+{stats['chunks_added']} chunks[/#00d9ff]  "
+                    f"[#ff006e]-{stats['deleted']} removed[/#ff006e]",
                     border_style="#00ff9f",
                 ))
             return True
@@ -529,25 +628,103 @@ class OblivionApp(App):
                 log.write("[#ff006e]◢ Run /index to index the new workspace[/#ff006e]")
                 self._populate_tree()
                 self.update_status()
+                # Restart watcher pointed at new workspace
+                if self.auto_watch_enabled:
+                    self._stop_watcher()
+                    # Need to update WORKSPACE in rag module
+                    import agent.rag as rag_mod
+                    rag_mod.WORKSPACE = Path(expanded).resolve()
+                    self.watcher = FileWatcher(
+                        workspace=Path(expanded).resolve(),
+                        callback=self._on_file_event,
+                    )
+                    self.watcher.start()
+                    log.write(f"[#00ff9f]◢ Watching {expanded} for changes[/#00ff9f]")
             return True
 
         if command == "/model":
             if not arg:
-                log.write(f"[#00ff9f]Current model:[/#00ff9f] {os.getenv('DEFAULT_MODEL', '?')}")
-            else:
-                # Add ollama/ prefix if not present
-                if "/" not in arg:
-                    arg = f"ollama/{arg}"
-                os.environ["DEFAULT_MODEL"] = arg
+                # Show table of all models
+                current = get_current_model_info()
+                lines = [f"[dim]Current:[/dim] [bold {current['color']}]{current['name']}[/bold {current['color']}]  [#00d9ff]{current['id']}[/#00d9ff]"]
+                lines.append("")
+                lines.append("[bold]Available models:[/bold]")
+                lines.append("")
+                for m in list_models_table():
+                    marker = "[#00ff9f]★[/#00ff9f]" if m["id"] == current["id"] else " "
+                    ok, _ = check_api_key(m["name"])
+                    key_status = "" if ok else "  [#ff006e](no key)[/#ff006e]"
+                    lines.append(
+                        f"{marker} [bold {m['color']}]{m['name']:<15}[/bold {m['color']}] "
+                        f"[#00d9ff]{m['cost']:<20}[/#00d9ff] "
+                        f"[dim]{m['description']}[/dim]{key_status}"
+                    )
+                lines.append("")
+                lines.append("[dim]Use:[/dim] [#00ff9f]/model <name>[/#00ff9f]  to switch")
+                log.write(Panel(
+                    "\n".join(lines),
+                    title="[bold #b537f2]◢ MODEL REGISTRY ◣[/bold #b537f2]",
+                    border_style="#b537f2",
+                ))
+                return True
+
+            # Switch to a model
+            model_name = arg.strip()
+
+            # Try short name first
+            if model_name in MODELS:
+                info = MODELS[model_name]
+                # Check API key
+                ok, msg = check_api_key(model_name)
+                if not ok:
+                    log.write(Panel(
+                        f"[#ff006e]✗ Cannot switch to {model_name}[/#ff006e]\n\n{msg}",
+                        title="[#ff006e]API KEY MISSING[/#ff006e]",
+                        border_style="#ff006e",
+                    ))
+                    return True
+
+                full_id = info["id"]
+                os.environ["DEFAULT_MODEL"] = full_id
+
                 env_path = Path.home() / "ai-agent" / ".env"
                 if env_path.exists():
                     lines = env_path.read_text().splitlines()
                     new_lines = [l for l in lines if not l.startswith("DEFAULT_MODEL=")]
-                    new_lines.append(f"DEFAULT_MODEL={arg}")
+                    new_lines.append(f"DEFAULT_MODEL={full_id}")
                     env_path.write_text("\n".join(new_lines) + "\n")
-                self.agent = Agent()  # reload with new model
-                log.write(f"[#00ff9f]✓ Switched to:[/#00ff9f] {arg}")
+
+                # No need to reload agent - LLMClient.model is dynamic now
+                log.write(Panel(
+                    f"[bold {info['color']}]✓ Switched to: {model_name}[/bold {info['color']}]\n\n"
+                    f"[#00d9ff]Model:[/#00d9ff]   {info['id']}\n"
+                    f"[#00d9ff]Speed:[/#00d9ff]   {info['speed']}\n"
+                    f"[#00d9ff]Cost:[/#00d9ff]    {info['cost']}\n"
+                    f"[dim]{info['description']}[/dim]",
+                    title="[bold #00ff9f]MODEL SWITCHED[/bold #00ff9f]",
+                    border_style=info['color'],
+                ))
                 self.update_status()
+                return True
+
+            # Try raw model id (e.g. "ollama/qwen3-coder:480b-cloud")
+            if "/" in model_name:
+                os.environ["DEFAULT_MODEL"] = model_name
+                env_path = Path.home() / "ai-agent" / ".env"
+                if env_path.exists():
+                    lines = env_path.read_text().splitlines()
+                    new_lines = [l for l in lines if not l.startswith("DEFAULT_MODEL=")]
+                    new_lines.append(f"DEFAULT_MODEL={model_name}")
+                    env_path.write_text("\n".join(new_lines) + "\n")
+                log.write(f"[#00ff9f]✓ Switched to (raw):[/#00ff9f] {model_name}")
+                self.update_status()
+                return True
+
+            # Unknown short name
+            available = ", ".join(MODELS.keys())
+            log.write(f"[#ff006e]✗ Unknown model: {model_name}[/#ff006e]")
+            log.write(f"[dim]Available: {available}[/dim]")
+            log.write(f"[dim]Or use full id: /model groq/llama-3.3-70b-versatile[/dim]")
             return True
 
         if command == "/save":
@@ -591,17 +768,48 @@ class OblivionApp(App):
             return True
 
         if command == "/stats":
+            current = get_current_model_info()
+            tokens = self.agent.llm.get_token_stats()
             log.write(Panel(
-                f"[#00ff9f]Session ID:[/#00ff9f] {self.session_id}\n"
-                f"[#00ff9f]Messages:[/#00ff9f] {len(self.agent.conversation)}\n"
-                f"[#00ff9f]Model:[/#00ff9f] {os.getenv('DEFAULT_MODEL', '?')}\n"
-                f"[#00ff9f]Workspace:[/#00ff9f] {os.getenv('WORKSPACE_DIR', '?')}",
-                title="[#b537f2]STATS[/#b537f2]",
+                f"[#00ff9f]Session ID:[/#00ff9f]    {self.session_id}\n"
+                f"[#00ff9f]Messages:[/#00ff9f]      {len(self.agent.conversation)}\n"
+                f"[#00ff9f]Model:[/#00ff9f]         [bold {current['color']}]{current['name']}[/bold {current['color']}] [dim]({current['id']})[/dim]\n"
+                f"[#00ff9f]Cost tier:[/#00ff9f]     {current['cost']}\n"
+                f"[#00ff9f]Workspace:[/#00ff9f]     {os.getenv('WORKSPACE_DIR', '?')}\n"
+                f"\n"
+                f"[#00ff9f]Tokens in:[/#00ff9f]     {tokens['input']:,}\n"
+                f"[#00ff9f]Tokens out:[/#00ff9f]    {tokens['output']:,}\n"
+                f"[#00ff9f]Total tokens:[/#00ff9f]  {tokens['total']:,}",
+                title="[#b537f2]SESSION STATS[/#b537f2]",
                 border_style="#b537f2",
             ))
             return True
 
+        if command == "/watch":
+            if arg == "off":
+                self._stop_watcher()
+                self.auto_watch_enabled = False
+                log.write("[#ff006e]◢ Auto-watch disabled[/#ff006e]")
+            elif arg == "on" or arg == "":
+                self.auto_watch_enabled = True
+                self._start_watcher()
+                status = "watching" if self.watcher and self.watcher.is_running() else "stopped"
+                log.write(f"[#00ff9f]◢ Auto-watch enabled ({status})[/#00ff9f]")
+            elif arg == "status":
+                running = self.watcher.is_running() if self.watcher else False
+                log.write(Panel(
+                    f"[#00ff9f]Auto-watch:[/#00ff9f] {'ON' if self.auto_watch_enabled else 'OFF'}\n"
+                    f"[#00ff9f]Watcher running:[/#00ff9f] {'yes' if running else 'no'}\n"
+                    f"[#00ff9f]Workspace:[/#00ff9f] {os.getenv('WORKSPACE_DIR', '?')}",
+                    title="[#b537f2]WATCHER STATUS[/#b537f2]",
+                    border_style="#b537f2",
+                ))
+            else:
+                log.write("[#ff006e]Usage: /watch [on|off|status][/#ff006e]")
+            return True
+
         if command == "/quit":
+            self._stop_watcher()
             self.exit()
             return True
 
