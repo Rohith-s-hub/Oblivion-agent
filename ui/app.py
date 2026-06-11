@@ -368,12 +368,61 @@ class AgentApp(App):
                 {"role": "system", "content": self.agent.system_prompt}
             ] + self.agent.conversation
 
-            # Call LLM (non-streaming for simplicity; we will stream in next phase)
+            # Streaming LLM call - tokens appear live in chat
             try:
-                llm_output = await asyncio.to_thread(
-                    self.agent.llm.chat, messages, False
+                # Buffer for streaming display
+                stream_buffer = {"text": ""}
+                token_count = {"n": 0}
+
+                # We use a queue to safely pass tokens from background thread to UI
+                token_queue: asyncio.Queue = asyncio.Queue()
+                loop = asyncio.get_event_loop()
+
+                def on_token(tok: str):
+                    # Called from background thread - schedule on event loop
+                    loop.call_soon_threadsafe(token_queue.put_nowait, tok)
+
+                async def consume_tokens():
+                    """Print tokens to the chat log as they stream in."""
+                    nonlocal log
+                    accum = ""
+                    while True:
+                        try:
+                            tok = await asyncio.wait_for(token_queue.get(), timeout=0.05)
+                        except asyncio.TimeoutError:
+                            if llm_task.done():
+                                break
+                            continue
+                        if tok is None:
+                            break
+                        accum += tok
+                        token_count["n"] += 1
+                        stream_buffer["text"] += tok
+                        # Update spinner with token count
+                        spinner.result = f"streaming... ({token_count['n']} tokens)"
+                        spinner.update_display()
+                        # Flush in chunks to chat log every ~50 tokens
+                        if "\n" in accum or len(accum) > 80:
+                            log.write(f"[dim cyan]{accum}[/dim cyan]", scroll_end=True)
+                            accum = ""
+                    if accum:
+                        log.write(f"[dim cyan]{accum}[/dim cyan]", scroll_end=True)
+
+                # Start LLM in background thread
+                llm_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        self.agent.llm.chat_stream, messages, on_token
+                    )
                 )
-                spinner.set_done(f"({len(llm_output)} chars)")
+
+                # Consume tokens concurrently
+                consumer_task = asyncio.create_task(consume_tokens())
+
+                # Wait for both
+                llm_output = await llm_task
+                await consumer_task
+
+                spinner.set_done(f"({len(llm_output)} chars, {token_count['n']} tokens)")
             except Exception as e:
                 spinner.set_done(f"Error: {e}")
                 log.write(f"[red]LLM error: {e}[/red]")

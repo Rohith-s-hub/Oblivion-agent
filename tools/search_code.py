@@ -30,7 +30,7 @@ def search_code(query: str, n_results: int = 5) -> str:
             f"(similarity: {score:.2f})"
         )
         # Show first 15 lines of the chunk
-        snippet_lines = r["text"].split("\n")[:18]
+        snippet_lines = r["text"].split("\n")[:6]  # just preview - agent MUST read_file for actual code
         output.append("\n".join(snippet_lines))
         output.append("")
 

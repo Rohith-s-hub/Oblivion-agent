@@ -3,34 +3,37 @@ RAG (Retrieval Augmented Generation) for the AI agent.
 Indexes the codebase and lets the agent search semantically.
 
 Uses:
-  - Ollama nomic-embed-text for embeddings (local, fast)
+  - Ollama nomic-embed-text for embeddings (local, fast, parallel)
   - ChromaDB for vector storage (embedded, no server)
 """
 import os
 import hashlib
+import asyncio
 from pathlib import Path
 from typing import Optional
 import chromadb
 from chromadb.config import Settings
 import httpx
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor
 
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 WORKSPACE = Path(os.getenv("WORKSPACE_DIR", ".")).expanduser().resolve()
 INDEX_DIR = Path.home() / ".ai-agent" / "chroma"
-EMBED_MODEL = "nomic-embed-text"
+EMBED_MODEL = os.getenv("EMBED_MODEL", "all-minilm")
 OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+PARALLEL_EMBEDDINGS = int(os.getenv("PARALLEL_EMBEDDINGS", "8"))
 
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
-# Files to index
 INDEXABLE_EXTENSIONS = {
-    ".py", ".js", ".ts", ".jsx", ".tsx",
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".vue",
     ".md", ".txt", ".yaml", ".yml", ".toml",
     ".html", ".css", ".json", ".sh", ".sql",
 }
+
 SKIP_DIRS = {
     ".git", "__pycache__", ".venv", "venv", "node_modules", ".chroma",
     "dist", "build", "target", "out", ".next", ".nuxt",
@@ -44,10 +47,11 @@ SKIP_FILE_PATTERNS = {
     "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock",
     "poetry.lock", "Cargo.lock", "Gemfile.lock", "composer.lock",
 }
-MAX_FILE_SIZE = 100_000  # 100KB per file
+
+MAX_FILE_SIZE = 100_000
 
 
-# ── Embeddings via Ollama ─────────────────────────────────────────────────────
+# ── Embeddings (single + batch) ───────────────────────────────────────────────
 def get_embedding(text: str, max_retries: int = 2) -> list[float]:
     """Get embedding vector with retry + truncation on errors."""
     if len(text) > 25000:
@@ -73,13 +77,19 @@ def get_embedding(text: str, max_retries: int = 2) -> list[float]:
     return []
 
 
+def get_embeddings_parallel(texts: list[str], max_workers: int = None) -> list[list[float]]:
+    """Get embeddings for multiple texts in parallel using a thread pool."""
+    workers = max_workers or PARALLEL_EMBEDDINGS
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        return list(executor.map(get_embedding, texts))
+
+
 # ── Chroma Setup ──────────────────────────────────────────────────────────────
 _client = None
 _collection = None
 
 
 def get_collection():
-    """Get or create the Chroma collection."""
     global _client, _collection
     if _collection is None:
         _client = chromadb.PersistentClient(
@@ -95,10 +105,6 @@ def get_collection():
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
 def chunk_file(content: str, filename: str, max_lines: int = 50) -> list[dict]:
-    """
-    Split file content into overlapping chunks.
-    Returns list of {text, start_line, end_line} dicts.
-    """
     lines = content.splitlines()
     chunks = []
     overlap = 10
@@ -107,28 +113,27 @@ def chunk_file(content: str, filename: str, max_lines: int = 50) -> list[dict]:
     while i < len(lines):
         chunk_lines = lines[i:i + max_lines]
         chunk_text = "\n".join(chunk_lines)
-
-        if chunk_text.strip():  # Skip empty chunks
+        if chunk_text.strip():
             chunks.append({
                 "text": f"File: {filename}\nLines {i+1}-{i+len(chunk_lines)}:\n\n{chunk_text}",
                 "start_line": i + 1,
                 "end_line": i + len(chunk_lines),
                 "file": filename,
             })
-
-        i += max_lines - overlap  # Slide window with overlap
+        i += max_lines - overlap
 
     return chunks
 
 
-# ── Indexing ──────────────────────────────────────────────────────────────────
 def should_index(path: Path) -> bool:
-    """Check if a file should be indexed."""
     if path.name in SKIP_FILE_PATTERNS:
         return False
     if path.suffix not in INDEXABLE_EXTENSIONS:
         return False
-    if path.stat().st_size > MAX_FILE_SIZE:
+    try:
+        if path.stat().st_size > MAX_FILE_SIZE:
+            return False
+    except OSError:
         return False
     if any(part in SKIP_DIRS for part in path.parts):
         return False
@@ -141,19 +146,23 @@ def should_index(path: Path) -> bool:
 
 
 def file_hash(content: str) -> str:
-    """Quick hash to detect file changes."""
     return hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
 
 
+# ── Indexing (parallel) ───────────────────────────────────────────────────────
 def index_codebase(root: Path = None, verbose: bool = True) -> dict:
     """
-    Walk the codebase, chunk files, embed, and store in Chroma.
-    Returns stats dict.
+    Walk the codebase, chunk files, embed in PARALLEL, and store in Chroma.
     """
     root = root or WORKSPACE
     collection = get_collection()
-
     stats = {"files_scanned": 0, "files_indexed": 0, "chunks_added": 0, "skipped": 0}
+
+    # ── PHASE 1: Collect all chunks ───────────────────────────────────────────
+    all_chunks = []  # list of (chunk_id, text, metadata)
+
+    if verbose:
+        print(f"📂 Scanning files...")
 
     for filepath in root.rglob("*"):
         if not filepath.is_file():
@@ -162,7 +171,6 @@ def index_codebase(root: Path = None, verbose: bool = True) -> dict:
             continue
 
         stats["files_scanned"] += 1
-
         try:
             content = filepath.read_text(encoding="utf-8", errors="ignore")
         except Exception:
@@ -172,58 +180,77 @@ def index_codebase(root: Path = None, verbose: bool = True) -> dict:
         rel_path = str(filepath.relative_to(root))
         chunks = chunk_file(content, rel_path)
 
-        if not chunks:
-            continue
-
-        # Embed and store each chunk
-        ids = []
-        embeddings = []
-        documents = []
-        metadatas = []
-
-        for idx, chunk in enumerate(chunks):
+        for chunk in chunks:
             chunk_id = f"{rel_path}::{chunk['start_line']}-{chunk['end_line']}"
-            emb = get_embedding(chunk["text"])
-            if not emb:
-                continue
+            all_chunks.append((
+                chunk_id,
+                chunk["text"],
+                {
+                    "file": rel_path,
+                    "start_line": chunk["start_line"],
+                    "end_line": chunk["end_line"],
+                },
+            ))
 
-            ids.append(chunk_id)
-            embeddings.append(emb)
-            documents.append(chunk["text"])
-            metadatas.append({
-                "file": rel_path,
-                "start_line": chunk["start_line"],
-                "end_line": chunk["end_line"],
-            })
+    if verbose:
+        print(f"📊 Collected {len(all_chunks)} chunks from {stats['files_scanned']} files")
+        print(f"🚀 Embedding in parallel (workers={PARALLEL_EMBEDDINGS})...")
+
+    if not all_chunks:
+        return stats
+
+    # ── PHASE 2: Embed all chunks in parallel ─────────────────────────────────
+    BATCH = 32  # process in batches to avoid memory spikes
+    total_batches = (len(all_chunks) + BATCH - 1) // BATCH
+
+    for batch_idx in range(total_batches):
+        batch = all_chunks[batch_idx * BATCH:(batch_idx + 1) * BATCH]
+        texts = [c[1] for c in batch]
+
+        embeddings = get_embeddings_parallel(texts)
+
+        # Filter out failed embeddings
+        ids, embs, docs, metas = [], [], [], []
+        for (chunk_id, text, meta), emb in zip(batch, embeddings):
+            if emb:
+                ids.append(chunk_id)
+                embs.append(emb)
+                docs.append(text)
+                metas.append(meta)
+            else:
+                stats["skipped"] += 1
 
         if ids:
-            # Upsert (insert or update)
             try:
                 collection.upsert(
                     ids=ids,
-                    embeddings=embeddings,
-                    documents=documents,
-                    metadatas=metadatas,
+                    embeddings=embs,
+                    documents=docs,
+                    metadatas=metas,
                 )
-                stats["files_indexed"] += 1
                 stats["chunks_added"] += len(ids)
-                if verbose:
-                    print(f"  ✓ Indexed {rel_path} ({len(ids)} chunks)")
             except Exception as e:
-                print(f"  ✗ Error indexing {rel_path}: {e}")
-                stats["skipped"] += 1
+                if verbose:
+                    print(f"  ✗ Batch error: {e}")
+                stats["skipped"] += len(ids)
+
+        if verbose:
+            done = min((batch_idx + 1) * BATCH, len(all_chunks))
+            pct = done / len(all_chunks) * 100
+            print(f"  [{batch_idx+1}/{total_batches}] {done}/{len(all_chunks)} chunks ({pct:.0f}%)")
+
+    # Count files that had at least one chunk indexed successfully
+    indexed_files = set()
+    for cid, _, meta in all_chunks:
+        indexed_files.add(meta["file"])
+    stats["files_indexed"] = len(indexed_files)
 
     return stats
 
 
 # ── Searching ─────────────────────────────────────────────────────────────────
 def search_code(query: str, n_results: int = 5) -> list[dict]:
-    """
-    Semantic search across the indexed codebase.
-    Returns list of {file, start_line, end_line, text, distance}.
-    """
     collection = get_collection()
-
     if collection.count() == 0:
         return []
 
@@ -231,10 +258,7 @@ def search_code(query: str, n_results: int = 5) -> list[dict]:
     if not query_emb:
         return []
 
-    results = collection.query(
-        query_embeddings=[query_emb],
-        n_results=n_results,
-    )
+    results = collection.query(query_embeddings=[query_emb], n_results=n_results)
 
     output = []
     for i in range(len(results["ids"][0])):
@@ -245,12 +269,10 @@ def search_code(query: str, n_results: int = 5) -> list[dict]:
             "text": results["documents"][0][i],
             "distance": results["distances"][0][i] if results.get("distances") else 0,
         })
-
     return output
 
 
 def index_stats() -> dict:
-    """Get stats about the current index."""
     collection = get_collection()
     return {
         "total_chunks": collection.count(),
@@ -259,7 +281,6 @@ def index_stats() -> dict:
 
 
 def clear_index():
-    """Wipe the index. Use before re-indexing."""
     global _client, _collection
     if _client is None:
         get_collection()
