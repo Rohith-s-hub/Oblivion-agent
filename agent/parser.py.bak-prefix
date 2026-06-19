@@ -147,9 +147,6 @@ def parse_llm_output(text: str):
             content = match.group(1).strip()
             # Also strip any fake continuation inside FINAL_ANSWER itself
             content = _strip_fake_observations(content)
-            # STRIP LEAKED FORMAT MARKERS (so UI never shows "THOUGHT:" or "ACTION:")
-            content = re.sub(r"^\s*THOUGHT\s*:.*?(?=\n\n|\Z)", "", content, flags=re.IGNORECASE | re.DOTALL).strip()
-            content = re.sub(r"^\s*ACTION\s*:.*?(?=\n\n|\Z)", "", content, flags=re.IGNORECASE | re.DOTALL).strip()
             return FinalAnswer(content=content)
 
     # ── Fallback: scan entire text for any JSON with "tool" key ──────────────
@@ -174,21 +171,6 @@ def parse_llm_output(text: str):
 
     # ── No ACTION found — treat as final answer if there is content ──────────
     if len(text) > 20 and "ACTION" not in text.upper():
-        # Strip leaked THOUGHT: prefix even in fallback mode
-        # Handles both "THOUGHT: ...\n..." AND "THOUGHT: ..." (no newline, whole thing is thought)
-        cleaned_text = text
-        # Pattern A: THOUGHT: followed by content then a newline then more content
-        m = re.match(r"\s*THOUGHT\s*:\s*(.+?)\n(.+)", cleaned_text, re.IGNORECASE | re.DOTALL)
-        if m:
-            # Keep only the part AFTER the thought line
-            cleaned_text = m.group(2).strip()
-        else:
-            # Pattern B: entire text is "THOUGHT: ..." — strip the prefix, keep the content
-            m2 = re.match(r"\s*THOUGHT\s*:\s*(.+)", cleaned_text, re.IGNORECASE | re.DOTALL)
-            if m2:
-                cleaned_text = m2.group(1).strip()
-        if not cleaned_text.strip():
-            cleaned_text = text
-        return FinalAnswer(content=cleaned_text)
+        return FinalAnswer(content=text)
 
     return None

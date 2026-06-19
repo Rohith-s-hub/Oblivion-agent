@@ -96,9 +96,6 @@ class AgentRuntime:
         self.agent.conversation.append({"role": "user", "content": user_message})
         _log_event(self.session_id, "user_message", {"content": user_message})
 
-        # LOOP DETECTION: track recent tool calls to catch the agent repeating itself
-        recent_calls: list[str] = []
-
         for i in range(self.max_iterations):
             step = i + 1
 
@@ -172,22 +169,6 @@ class AgentRuntime:
                 _log_event(self.session_id, "tool_start", {
                     "step": step, "tool": tool_name, "args": tool_args,
                 })
-
-                # LOOP DETECTION: if same tool+args called 3 times in a row, force the agent to stop
-                call_signature = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)[:200]}"
-                recent_calls.append(call_signature)
-                if len(recent_calls) > 3:
-                    recent_calls.pop(0)
-                if len(recent_calls) == 3 and recent_calls[0] == recent_calls[1] == recent_calls[2]:
-                    loop_msg = (
-                        f"LOOP DETECTED: You called {tool_name} with identical arguments 3 times. "
-                        f"This is wasting time. STOP repeating. Either: (a) try a DIFFERENT tool/argument, "
-                        f"or (b) give FINAL_ANSWER with what you know so far. Do NOT call {tool_name} again."
-                    )
-                    self.agent.conversation.append({"role": "user", "content": loop_msg})
-                    _log_event(self.session_id, "loop_detected", {"tool": tool_name, "signature": call_signature})
-                    recent_calls.clear()
-                    continue
 
                 # APPROVAL for sensitive tools
                 approved = True
