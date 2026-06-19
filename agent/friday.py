@@ -307,21 +307,112 @@ Now rewrite this technical output:
 Respond with ONLY the spoken summary. No quotes, no preamble, no explanation."""
 
 
+def _smart_local_summary(text: str, name: str) -> str:
+    """Fast local summarizer - no LLM call. Sounds natural, runs in <1ms."""
+    import re
+
+    raw = text.strip()
+    
+    # ── Pre-detect features BEFORE cleaning ──
+    has_code = bool(re.search(r"```", raw))
+    
+    # ── Strip markdown to get clean text for analysis ──
+    no_code = re.sub(r"```.*?```", " ", raw, flags=re.DOTALL)
+    clean = re.sub(r"\*\*(.+?)\*\*", r"\1", no_code)
+    clean = re.sub(r"`([^`]+)`", r"\1", clean)
+    clean = re.sub(r"^#+ ", "", clean, flags=re.MULTILINE)
+    clean = re.sub(r"^\s*[-*+]\s+", "", clean, flags=re.MULTILINE)
+    clean = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", clean)
+    clean = re.sub(r"\n{2,}", "\n", clean).strip()
+    
+    # ── Strategy 1: success/creation patterns (HIGHEST PRIORITY) ──
+    # Match patterns like: "✓ Created: foo.py" / "Written 245 chars to bar.py" / "Saved baz.md"
+    for pattern in [
+        r"(?:✓|Created|Written|Saved|Wrote)[:\s]+([\w./\-_]+\.\w+)",
+        r"([\w./\-_]+\.\w+)\s+(?:created|written|saved|ready)",
+    ]:
+        m = re.search(pattern, raw, re.IGNORECASE)
+        if m:
+            filename = m.group(1)
+            return f"Done, {name}. {filename} is ready."
+    
+    # ── Strategy 2: error / failure patterns ──
+    err = re.search(r"(?:✗|Error|Failed)[:\s]+(.{5,120}?)(?:\n|$)", raw, re.IGNORECASE)
+    if err:
+        detail = err.group(1).strip().rstrip(".")
+        # Trim if too long
+        if len(detail) > 80:
+            detail = detail[:80].rsplit(" ", 1)[0]
+        return f"Something went wrong, {name}. {detail}."
+    
+    # ── Strategy 3: code-heavy answer ──
+    if has_code:
+        # Try first sentence BEFORE the code block
+        before = raw.split("```")[0].strip()
+        before = re.sub(r"[*#`\[\]()]", "", before).strip().rstrip(":").rstrip(".")
+        if 15 <= len(before) <= 140:
+            return f"{before}. The code is on screen, {name}."
+        return f"I drafted the code for you, {name}. Take a look on screen."
+    
+    # ── Strategy 4: list/table output (many short lines) ──
+    lines = [l.strip() for l in clean.split("\n") if l.strip()]
+    if len(lines) >= 4:
+        avg_len = sum(len(l) for l in lines) / len(lines)
+        # Most lines are short = it's a list
+        if avg_len < 60:
+            # Filter out colon-ending header lines
+            items = [l for l in lines if not l.endswith(":") and len(l) > 1]
+            count = len(items)
+            return f"I found {count} items, {name}. Check the screen for the full list."
+    
+    # ── Strategy 5: short conversational reply ──
+    if len(clean) < 180:
+        first = clean.split("\n")[0].strip()
+        if name.lower() not in first.lower() and len(first) < 100:
+            if first.endswith((".", "!", "?")):
+                return first[:-1] + f", {name}{first[-1]}"
+            return first + f", {name}."
+        return first
+    
+    # ── Strategy 6: fallback — first meaningful sentence ──
+    sentences = re.split(r"(?<=[.!?])\s+", clean)
+    first = next((s.strip() for s in sentences if len(s.strip()) > 20), clean[:150])
+    if len(first) > 180:
+        first = first[:180].rsplit(" ", 1)[0] + "..."
+    
+    if name.lower() not in first.lower():
+        if first.endswith((".", "!", "?")):
+            first = first[:-1] + f", {name}{first[-1]}"
+        else:
+            first = first + f", {name}."
+    
+    return first
+
+
+
 def summarize_for_speech(text: str, llm_client=None) -> str:
+    """Convert technical agent output into natural spoken summary.
+    
+    Default (FAST): uses _smart_local_summary - no LLM call, runs instantly.
+    Optional (SLOW): set FRIDAY_USE_LLM_REWRITE=true to use LLM rewrite.
+    """
     if not text or not text.strip():
         return ""
 
     name = get_name()
     text = text.strip()
 
-    if len(text) < 200 and "```" not in text and "\n\n" not in text:
+    # Very short clean text -> speak as-is
+    if len(text) < 100 and "```" not in text and "\n\n" not in text:
         return text
 
-    use_llm = os.getenv("FRIDAY_USE_LLM_REWRITE", "true").lower() == "true"
+    use_llm = os.getenv("FRIDAY_USE_LLM_REWRITE", "false").lower() == "true"
+    
+    # FAST PATH (default): smart local summarizer
     if not use_llm or llm_client is None:
-        first_line = text.split("\n")[0][:150]
-        return f"Here's what I found, {name}: {first_line}"
+        return _smart_local_summary(text, name)
 
+    # SLOW PATH (opt-in): LLM rewrite for premium quality
     try:
         prompt = PERSONALITY_PROMPT.format(name=name, output=text[:2000])
         original_model = os.environ.get("DEFAULT_MODEL", "")
@@ -336,11 +427,10 @@ def summarize_for_speech(text: str, llm_client=None) -> str:
             if original_model:
                 os.environ["DEFAULT_MODEL"] = original_model
         response = response.strip(' "\'')
-        return response or text[:200]
+        return response or _smart_local_summary(text, name)
     except Exception as e:
-        print(f"FRIDAY rewrite failed: {e}")
-        first_line = text.split("\n")[0][:150]
-        return f"Here's what I found, {name}: {first_line}"
+        print(f"FRIDAY LLM rewrite failed: {e}, using local summary")
+        return _smart_local_summary(text, name)
 
 
 # ── Self-test ────────────────────────────────────────────────────────────────
