@@ -155,3 +155,112 @@ def create_dir(path: str) -> str:
         return f"Error: {e}"
     p.mkdir(parents=True, exist_ok=True)
     return f"Directory created: {path}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# new_workspace — creates a folder ANYWHERE (with safety guards) and switches
+# the active workspace to it. Used by the agent when user says things like:
+#   "create a new workspace called todo"
+#   "make a workspace outside in home called myapp"
+# ─────────────────────────────────────────────────────────────────────────────
+def new_workspace(name: str, location: str = "") -> str:
+    """Create a new workspace folder and switch into it.
+
+    Args:
+      name: folder name (e.g. "myapp")
+      location: optional parent directory. Special keywords:
+                ""             → defaults to ~/Projects/
+                "~" / "home"   → home directory (~)
+                "desktop"      → ~/Desktop
+                "outside"      → home directory (~)
+                "projects"     → ~/Projects (default)
+                anything else  → treated as a path (~ expanded)
+    """
+    import os as _os
+    from pathlib import Path as _Path
+
+    home = _Path.home()
+    self_dir = (home / "ai-agent").resolve()
+
+    # Sanitize name
+    name = (name or "").strip().replace(" ", "-")
+    if not name or name.startswith(".") or "/" in name or "\\" in name:
+        return f"Error: Invalid workspace name '{name}'. Use a simple name like 'my-app'."
+
+    # Resolve location keyword
+    loc = (location or "").strip().lower()
+    if loc in ("", "projects", "default"):
+        parent = home / "Projects"
+    elif loc in ("~", "home", "outside", "home folder", "in home"):
+        parent = home
+    elif loc in ("desktop", "~/desktop"):
+        parent = home / "Desktop"
+    elif loc in ("documents", "~/documents"):
+        parent = home / "Documents"
+    elif loc in ("downloads", "~/downloads"):
+        parent = home / "Downloads"
+    else:
+        # Treat as a path
+        parent = _Path(location).expanduser().resolve()
+
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        return f"Error: Could not access parent dir {parent}: {e}"
+
+    new_ws = (parent / name).resolve()
+
+    # Safety: refuse inside agent source dir
+    try:
+        new_ws.relative_to(self_dir)
+        return f"Error: Refused — that path is inside the agent source dir."
+    except ValueError:
+        pass
+
+    # Safety: refuse system dirs
+    forbidden = ["/etc", "/usr", "/bin", "/sbin", "/sys", "/proc", "/boot", "/root"]
+    for f in forbidden:
+        if str(new_ws).startswith(f + "/") or str(new_ws) == f:
+            return f"Error: Refused — {f} is a protected system directory."
+
+    if new_ws.exists():
+        if not new_ws.is_dir():
+            return f"Error: {new_ws} exists but is not a directory."
+        # Already exists — just switch
+        action = "switched to existing"
+    else:
+        try:
+            new_ws.mkdir(parents=True, exist_ok=False)
+            action = "created and switched to"
+        except Exception as e:
+            return f"Error: Could not create {new_ws}: {e}"
+
+    # Switch active workspace
+    _os.environ["WORKSPACE_DIR"] = str(new_ws)
+
+    # Update WORKSPACE in this module too (so subsequent tool calls use it)
+    global WORKSPACE
+    try:
+        WORKSPACE = new_ws
+    except Exception:
+        pass
+
+    # Update rag too
+    try:
+        import agent.rag as rag_mod
+        rag_mod.WORKSPACE = new_ws
+    except Exception:
+        pass
+
+    # Persist to .env
+    try:
+        env_path = home / "ai-agent" / ".env"
+        if env_path.exists():
+            env_lines = env_path.read_text().splitlines()
+            env_lines = [l for l in env_lines if not l.startswith("WORKSPACE_DIR=")]
+            env_lines.append(f"WORKSPACE_DIR={new_ws}")
+            env_path.write_text("\n".join(env_lines) + "\n")
+    except Exception:
+        pass
+
+    return f"Workspace {action}: {new_ws}\nName: {name}\nThe UI workspace panel will refresh automatically. All subsequent file operations will use this new workspace."
