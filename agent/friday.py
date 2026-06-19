@@ -151,9 +151,9 @@ def _synth_elevenlabs(text: str, output_path: str) -> bool:
     except Exception as e:
         msg = str(e).lower()
         if "quota" in msg or "credit" in msg or "limit" in msg:
-            print("FRIDAY: ElevenLabs quota exhausted, falling back to Edge")
+            print("MEERA: ElevenLabs quota exhausted, falling back to Edge")
         else:
-            print(f"FRIDAY: ElevenLabs error ({e}), falling back to Edge")
+            print(f"MEERA: ElevenLabs error ({e}), falling back to Edge")
         return False
 
 
@@ -177,7 +177,7 @@ def _synth_edge(text: str, output_path: str) -> bool:
         asyncio.run(_synth_edge_async(text, output_path))
         return True
     except Exception as e:
-        print(f"FRIDAY: Edge TTS error: {e}")
+        print(f"MEERA: Edge TTS error: {e}")
         return False
 
 
@@ -192,7 +192,7 @@ def speak(text: str, blocking: bool = False) -> Optional[threading.Thread]:
     def _do_speak():
         global _current_proc
         if not _ensure_player():
-            print("FRIDAY: ffplay not found. Install: sudo apt install ffmpeg")
+            print("MEERA: ffplay not found. Install: sudo apt install ffmpeg")
             return
 
         tmp_path = None
@@ -274,7 +274,7 @@ def get_elevenlabs_quota() -> Optional[dict]:
 
 
 # ── Personality rewriter ─────────────────────────────────────────────────────
-PERSONALITY_PROMPT = """You are F.R.I.D.A.Y. - a witty, warm, professional AI assistant (think Iron Man's FRIDAY).
+PERSONALITY_PROMPT = """You are M.E.E.R.A. - a witty, warm, professional AI assistant (think a smart, warm Indian assistant - poised like FRIDAY, grounded like family).
 You address the user as "{name}" - always use this name.
 
 Your job: rewrite the technical output below into a SHORT spoken summary (1-3 sentences max).
@@ -292,13 +292,13 @@ Rules:
 Examples:
 
 Technical: "Contents of .: DIR agent/ DIR db/ FILE main.py (2KB) FILE README.md (500B)"
-FRIDAY: "You've got 4 items in there, {name} - two folders for agent and db, plus main.py and a README. Anything you want to dig into?"
+MEERA: "You've got 4 items in there, {name} - two folders for agent and db, plus main.py and a README. Anything you want to dig into?"
 
 Technical: "Written 1240 chars to algos/quicksort.py"
-FRIDAY: "Done, {name}. Quicksort is saved to algos/quicksort.py. Want me to test it?"
+MEERA: "Done, {name}. Quicksort is saved to algos/quicksort.py. Want me to test it?"
 
 Technical: "Error: File not found: missing.py"
-FRIDAY: "That file doesn't exist, {name}. Want me to create it, or did you mean a different name?"
+MEERA: "That file doesn't exist, {name}. Want me to create it, or did you mean a different name?"
 
 Now rewrite this technical output:
 
@@ -358,7 +358,7 @@ if __name__ == "__main__":
     print()
     print("Speaking test phrase...")
     speak(
-        f"Good evening, {get_name()}. F.R.I.D.A.Y. systems online. "
+        f"Good evening, {get_name()}. M.E.E.R.A. systems online. "
         f"Premium voice provider engaged. All systems ready when you are.",
         blocking=True,
     )

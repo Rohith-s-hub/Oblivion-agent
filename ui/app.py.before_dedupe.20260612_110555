@@ -24,7 +24,6 @@ from rich.console import Group
 
 from agent.core import Agent
 from agent.parser import parse_llm_output, ToolCall, FinalAnswer
-from agent.runtime import AgentRuntime, RuntimeCallbacks
 from tools.registry import dispatch
 from tools.diff import make_diff
 from db.store import init_db, create_session, save_message, load_session, list_sessions
@@ -302,6 +301,7 @@ class OblivionApp(App):
     }
 
     #status-bar {
+        dock: bottom;
         height: 1;
         background: #1a0a2e;
         color: #00ff9f;
@@ -502,7 +502,7 @@ class OblivionApp(App):
         """Pattern G: cyan waveform for M.E.E.R.A. — flat when idle, pulsing when speaking."""
         width = 16
         if not self.meera_speaking:
-            return "  [#00d9ff]M.E.E.R.A. " + ("▁" * width) + "[/#00d9ff]"
+            return "  [dim #00d9ff]M.E.E.R.A. " + ("▁" * width) + "[/dim #00d9ff]"
         bars = "▁▂▃▄▅▆▇█▇▆▅▄▃▂"
         phase = self.meera_wave_phase
         out = []
@@ -678,51 +678,6 @@ class OblivionApp(App):
         await scroll.mount(item)
         scroll.scroll_end(animate=False)
 
-    def _trigger_bg_reindex(self, workspace_path):
-        """Phase 2B.3: fire-and-forget background reindex after workspace switch.
-        Shows a one-line progress note in the chat log when done.
-        Skips if a reindex is already in progress to avoid thread storms.
-        """
-        if getattr(self, "_oblivion_bg_reindex", False):
-            return
-        self._oblivion_bg_reindex = True
-
-        log = None
-        try:
-            log = self.query_one("#chat-log", RichLog)
-        except Exception:
-            pass
-
-        def worker():
-            try:
-                if log is not None:
-                    self.call_from_thread(
-                        log.write,
-                        "[#00d9ff]↻ Background reindex started…[/#00d9ff]",
-                    )
-                from agent.rag import index_codebase
-                from pathlib import Path as _P
-                stats = index_codebase(root=_P(str(workspace_path)), force=False, verbose=False)
-                if log is not None:
-                    self.call_from_thread(
-                        log.write,
-                        f"[#00ff9f]↻ Reindex done:[/#00ff9f] "
-                        f"{stats.get('files_indexed',0)} files, "
-                        f"+{stats.get('chunks_added',0)} chunks, "
-                        f"+{stats.get('symbols_added',0)} symbols",
-                    )
-            except Exception as e:
-                if log is not None:
-                    self.call_from_thread(
-                        log.write,
-                        f"[#ff006e]Reindex failed: {e}[/#ff006e]",
-                    )
-            finally:
-                self._oblivion_bg_reindex = False
-
-        import threading as _th
-        _th.Thread(target=worker, daemon=True).start()
-
     def _populate_tree(self):
         tree = self.query_one("#workspace-tree", Tree)
         tree.clear()
@@ -863,11 +818,6 @@ class OblivionApp(App):
                     )
                     self.watcher.start()
                     log.write(f"[#00ff9f]◢ Watching {expanded} for changes[/#00ff9f]")
-                # Polish: also trigger background reindex like /openproject does
-                try:
-                    self._trigger_bg_reindex(Path(expanded).resolve())
-                except Exception:
-                    pass
             return True
 
         if command == "/newproject":
@@ -924,34 +874,17 @@ class OblivionApp(App):
                 self.watcher.start()
             self._populate_tree()
             self.update_status()
-            self._trigger_bg_reindex(new_project)
             return True
 
         if command == "/openproject":
             if not arg:
-                log.write("[#ff006e]✗ Usage: /openproject <name-or-path>[/#ff006e]")
-                log.write("[dim]Examples:  /openproject myapp   |  /openproject /home/rohit/ai-agent  |  /openproject ~/code[/dim]")
+                log.write("[#ff006e]✗ Usage: /openproject <name>[/#ff006e]")
                 return True
-
-            raw = arg.strip()
             projects_root = Path.home() / "Projects"
-
-            # Accept either: name inside ~/Projects/, OR absolute/~-prefixed path
-            if raw.startswith("/") or raw.startswith("~") or raw.startswith("./") or raw.startswith("../"):
-                target = Path(raw).expanduser().resolve()
-            else:
-                # Try ~/Projects/<name> first, fall back to absolute resolve
-                p_proj = (projects_root / raw).resolve()
-                if p_proj.exists() and p_proj.is_dir():
-                    target = p_proj
-                else:
-                    # Maybe user typed a bare name that happens to be a directory in CWD or home
-                    p_alt = Path(raw).expanduser().resolve()
-                    target = p_alt
-
+            target = (projects_root / arg.strip()).resolve()
             if not target.exists() or not target.is_dir():
                 log.write(f"[#ff006e]✗ Not found: {target}[/#ff006e]")
-                log.write("[dim]Use /projects to list ~/Projects/ entries, or pass an absolute path.[/dim]")
+                log.write("[dim]Use /projects to list available projects.[/dim]")
                 return True
             os.environ["WORKSPACE_DIR"] = str(target)
             self._update_env("WORKSPACE_DIR", str(target))
@@ -977,7 +910,119 @@ class OblivionApp(App):
                 self.watcher.start()
             self._populate_tree()
             self.update_status()
-            self._trigger_bg_reindex(target)
+            return True
+
+        if command == "/projects":
+            projects_root = Path.home() / "Projects"
+            if not projects_root.exists():
+                log.write(f"[dim]~/Projects/ does not exist yet. Use /newproject <name> to create one.[/dim]")
+                return True
+            folders = sorted([p for p in projects_root.iterdir() if p.is_dir() and not p.name.startswith(".")])
+            if not folders:
+                log.write("[dim]~/Projects/ is empty. Use /newproject <name> to create one.[/dim]")
+                return True
+            current_ws = Path(os.getenv("WORKSPACE_DIR", "")).resolve()
+            lines = []
+            for p in folders:
+                marker = "[#00ff9f]★[/#00ff9f]" if p.resolve() == current_ws else " "
+                lines.append(f"{marker} [bold]{p.name}[/bold]  [dim]{p}[/dim]")
+            log.write(Panel(
+                "\n".join(lines) + "\n\n[dim]★ = current workspace.  Use /openproject <name> to switch.[/dim]",
+                title=f"[#b537f2]◢ PROJECTS ({len(folders)}) ◣[/#b537f2]",
+                border_style="#b537f2",
+            ))
+            return True
+
+        if command == "/newproject":
+            if not arg:
+                log.write("[#ff006e]✗ Usage: /newproject <name>[/#ff006e]")
+                log.write("[dim]Creates ~/Projects/<name>/ and switches workspace into it.[/dim]")
+                return True
+            projects_root = Path.home() / "Projects"
+            projects_root.mkdir(parents=True, exist_ok=True)
+            self_dir = (Path.home() / "ai-agent").resolve()
+            name = arg.strip().replace(" ", "-")
+            if "/" in name or "\\" in name or name.startswith("."):
+                log.write(f"[#ff006e]✗ Invalid project name: {arg}[/#ff006e]")
+                log.write("[dim]Use a simple name like 'my-app' (no slashes, no leading dot).[/dim]")
+                return True
+            new_project = (projects_root / name).resolve()
+            try:
+                new_project.relative_to(self_dir)
+                log.write("[#ff006e]✗ Refused: that would land inside the agent source dir.[/#ff006e]")
+                return True
+            except ValueError:
+                pass
+            if new_project.exists():
+                log.write(f"[#ff006e]✗ Already exists: {new_project}[/#ff006e]")
+                log.write("[dim]Try /openproject " + name + " to switch into it instead.[/dim]")
+                return True
+            try:
+                new_project.mkdir(parents=True, exist_ok=False)
+            except Exception as e:
+                log.write(f"[#ff006e]✗ Could not create directory: {e}[/#ff006e]")
+                return True
+            os.environ["WORKSPACE_DIR"] = str(new_project)
+            self._update_env("WORKSPACE_DIR", str(new_project))
+            try:
+                import agent.rag as rag_mod
+                rag_mod.WORKSPACE = new_project
+            except Exception:
+                pass
+            try:
+                import tools.filesystem as fs_mod
+                fs_mod.WORKSPACE = new_project
+            except Exception:
+                pass
+            log.write(Panel(
+                f"[#00ff9f]✓ New project created:[/#00ff9f] [bold]{name}[/bold]\n"
+                f"[#00d9ff]Location:[/#00d9ff] [dim]{new_project}[/dim]\n"
+                f"[#00ff9f]Workspace switched.[/#00ff9f] Oblivion will now build here.",
+                title="[#b537f2]◢ NEW PROJECT ◣[/#b537f2]",
+                border_style="#00ff9f",
+            ))
+            if self.auto_watch_enabled:
+                self._stop_watcher()
+                self.watcher = FileWatcher(workspace=new_project, callback=self._on_file_event)
+                self.watcher.start()
+            self._populate_tree()
+            self.update_status()
+            return True
+
+        if command == "/openproject":
+            if not arg:
+                log.write("[#ff006e]✗ Usage: /openproject <name>[/#ff006e]")
+                return True
+            projects_root = Path.home() / "Projects"
+            target = (projects_root / arg.strip()).resolve()
+            if not target.exists() or not target.is_dir():
+                log.write(f"[#ff006e]✗ Not found: {target}[/#ff006e]")
+                log.write("[dim]Use /projects to list available projects.[/dim]")
+                return True
+            os.environ["WORKSPACE_DIR"] = str(target)
+            self._update_env("WORKSPACE_DIR", str(target))
+            try:
+                import agent.rag as rag_mod
+                rag_mod.WORKSPACE = target
+            except Exception:
+                pass
+            try:
+                import tools.filesystem as fs_mod
+                fs_mod.WORKSPACE = target
+            except Exception:
+                pass
+            log.write(Panel(
+                f"[#00ff9f]✓ Opened project:[/#00ff9f] [bold]{arg}[/bold]\n"
+                f"[#00d9ff]Location:[/#00d9ff] [dim]{target}[/dim]",
+                title="[#b537f2]◢ PROJECT OPENED ◣[/#b537f2]",
+                border_style="#00ff9f",
+            ))
+            if self.auto_watch_enabled:
+                self._stop_watcher()
+                self.watcher = FileWatcher(workspace=target, callback=self._on_file_event)
+                self.watcher.start()
+            self._populate_tree()
+            self.update_status()
             return True
 
         if command == "/projects":
@@ -1487,185 +1532,155 @@ class OblivionApp(App):
         self.run_worker(self._run_agent(user_input), exclusive=True)
 
     async def _run_agent(self, user_message: str):
-        """Phase 2A: delegates the loop to AgentRuntime; TUI just renders + approves."""
         log = self.query_one("#chat-log", RichLog)
         activity_scroll = self.query_one("#activity-scroll", VerticalScroll)
 
-        runtime = AgentRuntime(self.agent, self.session_id, max_iterations=20)
+        self.agent.conversation.append({"role": "user", "content": user_message})
+        MAX_ITERATIONS = 20
 
-        # ── Callbacks ────────────────────────────────────────────────────────
-        spinner_box = {"item": None, "tokens": 0}
-
-        async def on_llm_start(step: int):
-            self.iteration_count = step
-            self.current_status = f"▓ LLM step {step}"
+        for i in range(MAX_ITERATIONS):
+            self.iteration_count = i + 1
+            self.current_status = f"▓ LLM step {i+1}"
             self.update_status()
-            item = ActivityItem("llm.chat", {"step": step}, "running")
-            await activity_scroll.mount(item)
+
+            spinner = ActivityItem("llm.chat", {"step": i + 1}, "running")
+            await activity_scroll.mount(spinner)
             activity_scroll.scroll_end(animate=False)
-            spinner_box["item"] = item
-            spinner_box["tokens"] = 0
 
-        def on_token(tok: str):
-            spinner_box["tokens"] += 1
-            it = spinner_box["item"]
-            if it is not None:
-                it.result = f"streaming… {spinner_box['tokens']} tokens"
-                try:
-                    it.update_display()
-                except Exception:
-                    pass
+            messages = [{"role": "system", "content": self.agent.system_prompt}] + self.agent.conversation
 
-        async def on_llm_end(step: int, output: str, tokens: int):
-            it = spinner_box["item"]
-            if it is not None:
-                it.set_done(f"{len(output)} chars, {spinner_box['tokens']} tokens")
-
-        async def on_thought(thought: str):
-            t = thought[:200] + "…" if len(thought) > 200 else thought
-            log.write(f"[#b537f2]◇[/#b537f2] [italic dim]{t}[/italic dim]")
-
-        async def on_tool_start(tool_name: str, args: dict):
-            item = ActivityItem(tool_name, args, "running")
-            await activity_scroll.mount(item)
-            activity_scroll.scroll_end(animate=False)
-            self.activity_items.append(item)
-            self.current_status = f"▓ {tool_name}"
-            self.update_status()
-            return item
-
-        async def on_tool_done(handle, result: str, ms: int):
-            if handle is not None:
-                handle.result = f"{result}  [dim]({ms}ms)[/dim]"
-                handle.set_done(handle.result)
-
-        async def on_approve_tool(tool_name: str, args: dict) -> bool:
-            # Reuse the existing TUI ApprovalModal flow via _handle_tool helpers
-            path = args.get("path", "")
-            if tool_name == "write_file":
-                content = args.get("content", "")
-                try:
-                    from tools.filesystem import _safe_path, _PathError
-                    p = _safe_path(path)
-                except _PathError as e:
-                    log.write(f"[#ff006e]✗ {e}[/#ff006e]")
-                    return False
-                except Exception as e:
-                    log.write(f"[#ff006e]✗ resolve error: {e}[/#ff006e]")
-                    return False
-                if p.exists():
-                    original = p.read_text(encoding="utf-8", errors="ignore")
-                    diff = make_diff(original, content, path)
-                    title, body = f"Write to {path}?", f"Modify {len(content)} bytes."
-                else:
-                    diff = make_diff("", content, path)
-                    title, body = f"Create {path}?", f"New file: {len(content.splitlines())} lines."
-                return await self.push_screen_wait(ApprovalModal(title, body, diff))
-
-            if tool_name == "edit_file":
-                old, new = args.get("old_text", ""), args.get("new_text", "")
-                try:
-                    from tools.filesystem import _safe_path, _PathError
-                    p = _safe_path(path)
-                except _PathError as e:
-                    log.write(f"[#ff006e]✗ {e}[/#ff006e]")
-                    return False
-                except Exception as e:
-                    log.write(f"[#ff006e]✗ resolve error: {e}[/#ff006e]")
-                    return False
-                if not p.exists():
-                    log.write(f"[#ff006e]✗ File not found: {path}[/#ff006e]")
-                    return False
-                original = p.read_text(encoding="utf-8", errors="ignore")
-                if old not in original:
-                    log.write(f"[#ff006e]✗ old_text not found in {path}[/#ff006e]")
-                    return False
-                updated = original.replace(old, new, 1)
-                diff = make_diff(original, updated, path)
-                return await self.push_screen_wait(ApprovalModal(
-                    f"Edit {path}?",
-                    f"Replace {len(old.splitlines())} line(s) with {len(new.splitlines())}.",
-                    diff,
-                ))
-
-            if tool_name == "run_bash":
-                command = args.get("command", "")
-                return await self.push_screen_wait(ApprovalModal(
-                    "Run shell command?", f"$ {command}", "",
-                ))
-
-            return True
-
-        async def on_final(content: str):
-            log.write(Panel(
-                RichMarkdown(content),
-                title="[bold #00ff9f]◢ OBLIVION ◣[/bold #00ff9f]",
-                border_style="#00ff9f",
-            ))
-            save_message(self.session_id, "assistant", content)
-            if friday.is_enabled():
-                def speak_summary():
-                    try:
-                        spoken = friday.summarize_for_speech(content, llm_client=self.agent.llm)
-                        if spoken:
-                            self.call_from_thread(self._show_friday_speech, spoken)
-                            friday.speak(spoken, blocking=True)
-                            self.call_from_thread(self._meera_done)
-                    except Exception as e:
-                        print(f"FRIDAY error: {e}")
-                        try:
-                            self.call_from_thread(self._meera_done)
-                        except Exception:
-                            pass
-                threading.Thread(target=speak_summary, daemon=True).start()
-
-        async def on_error(msg: str):
-            log.write(f"[#ff006e]✗ LLM error: {msg}[/#ff006e]")
-
-        async def on_parse_failure(raw: str):
-            log.write("[#ff006e]✗ Could not parse output, retrying…[/#ff006e]")
-
-        # ── Run the unified runtime ──────────────────────────────────────────
-        cbs = RuntimeCallbacks(
-            on_llm_start=on_llm_start,
-            on_token=on_token,
-            on_llm_end=on_llm_end,
-            on_thought=on_thought,
-            on_tool_start=on_tool_start,
-            on_tool_done=on_tool_done,
-            on_approve_tool=on_approve_tool,
-            on_final=on_final,
-            on_error=on_error,
-            on_parse_failure=on_parse_failure,
-        )
-
-        try:
-            await runtime.run_async(user_message, cbs)
-        finally:
-            # Repopulate FILESYSTEM panel after any write/edit/create
             try:
-                self._populate_tree()
-            except Exception:
-                pass
-            self.agent_busy = False
-            self.iteration_count = 0
-            self.current_status = "▓ READY"
-            self.update_status()
+                token_queue: asyncio.Queue = asyncio.Queue()
+                loop = asyncio.get_event_loop()
+                token_count = {"n": 0}
+
+                def on_token(tok: str):
+                    loop.call_soon_threadsafe(token_queue.put_nowait, tok)
+
+                async def consume_tokens():
+                    accum = ""
+                    while True:
+                        try:
+                            tok = await asyncio.wait_for(token_queue.get(), timeout=0.05)
+                        except asyncio.TimeoutError:
+                            if llm_task.done():
+                                break
+                            continue
+                        if tok is None:
+                            break
+                        accum += tok
+                        token_count["n"] += 1
+                        spinner.result = f"streaming… {token_count['n']} tokens"
+                        spinner.update_display()
+                        if "\n" in accum or len(accum) > 80:
+                            log.write(f"[dim #00d9ff]{accum}[/dim #00d9ff]")
+                            accum = ""
+                    if accum:
+                        log.write(f"[dim #00d9ff]{accum}[/dim #00d9ff]")
+
+                llm_task = asyncio.create_task(
+                    asyncio.to_thread(self.agent.llm.chat_stream, messages, on_token)
+                )
+                consumer_task = asyncio.create_task(consume_tokens())
+                llm_output = await llm_task
+                await consumer_task
+                spinner.set_done(f"{len(llm_output)} chars, {token_count['n']} tokens")
+            except Exception as e:
+                spinner.set_done(f"Error: {e}")
+                log.write(f"[#ff006e]✗ LLM error: {e}[/#ff006e]")
+                break
+
+            self.agent.conversation.append({"role": "assistant", "content": llm_output})
+            parsed = parse_llm_output(llm_output)
+
+            if isinstance(parsed, FinalAnswer):
+                log.write(Panel(
+                    RichMarkdown(parsed.content),
+                    title="[bold #00ff9f]◢ OBLIVION ◣[/bold #00ff9f]",
+                    border_style="#00ff9f",
+                ))
+                save_message(self.session_id, "assistant", parsed.content)
+                # M.E.E.R.A. speaks the answer (summarized + conversational)
+                if friday.is_enabled():
+                    def speak_summary():
+                        try:
+                            spoken = friday.summarize_for_speech(
+                                parsed.content, llm_client=self.agent.llm
+                            )
+                            if spoken:
+                                self.call_from_thread(self._show_friday_speech, spoken)
+                                friday.speak(spoken, blocking=True)
+                                self.call_from_thread(self._meera_done)
+                        except Exception as e:
+                            print(f"FRIDAY error: {e}")
+                            try:
+                                self.call_from_thread(self._meera_done)
+                            except Exception:
+                                pass
+                    threading.Thread(target=speak_summary, daemon=True).start()
+                break
+
+            if isinstance(parsed, ToolCall):
+                if parsed.thought:
+                    thought = parsed.thought[:200] + "…" if len(parsed.thought) > 200 else parsed.thought
+                    log.write(f"[#b537f2]◇[/#b537f2] [italic dim]{thought}[/italic dim]")
+
+                if parsed.tool == "finish":
+                    summary = parsed.args.get("summary", "Done.")
+                    log.write(Panel(summary, title="[#00ff9f]◢ DONE[/#00ff9f]", border_style="#00ff9f"))
+                    save_message(self.session_id, "assistant", summary)
+                    if friday.is_enabled():
+                        def speak_done():
+                            try:
+                                spoken = friday.summarize_for_speech(summary, llm_client=self.agent.llm)
+                                if spoken:
+                                    self.call_from_thread(self._show_friday_speech, spoken)
+                                    friday.speak(spoken, blocking=True)
+                                    self.call_from_thread(self._meera_done)
+                            except Exception as e:
+                                print(f"FRIDAY error: {e}")
+                                try:
+                                    self.call_from_thread(self._meera_done)
+                                except Exception:
+                                    pass
+                        threading.Thread(target=speak_done, daemon=True).start()
+                    break
+
+                item = ActivityItem(parsed.tool, parsed.args, "running")
+                await activity_scroll.mount(item)
+                activity_scroll.scroll_end(animate=False)
+                self.activity_items.append(item)
+                self.current_status = f"▓ {parsed.tool}"
+                self.update_status()
+
+                result = await self._handle_tool(parsed.tool, parsed.args, item)
+                item.set_done(result)
+
+                self.agent.conversation.append({
+                    "role": "user",
+                    "content": f"OBSERVATION (result of {parsed.tool}):\n{result}\n\nContinue: next THOUGHT + ACTION, or FINAL_ANSWER.",
+                })
+
+                if parsed.tool in ("write_file", "edit_file", "create_dir"):
+                    self._populate_tree()
+                continue
+
+            log.write("[#ff006e]✗ Could not parse output, retrying…[/#ff006e]")
+            self.agent.conversation.append({
+                "role": "user",
+                "content": "Invalid format. Use THOUGHT: then ACTION: {json} or FINAL_ANSWER: text"
+            })
+
+        self.agent_busy = False
+        self.iteration_count = 0
+        self.current_status = "▓ READY"
+        self.update_status()
 
     async def _handle_tool(self, tool_name: str, args: dict, item: ActivityItem) -> str:
         if tool_name == "write_file":
             path = args.get("path", "")
             content = args.get("content", "")
-
-            # Resolve against active workspace, not ~/ai-agent CWD
-            try:
-                from tools.filesystem import _safe_path, _PathError
-                p = _safe_path(path)
-            except _PathError as e:
-                return f"Error: {e}"
-            except Exception as e:
-                return f"Error resolving path {path}: {e}"
-
+            p = Path(path)
             if p.exists():
                 original = p.read_text(encoding="utf-8", errors="ignore")
                 diff = make_diff(original, content, path)
@@ -1681,16 +1696,7 @@ class OblivionApp(App):
         if tool_name == "edit_file":
             path = args.get("path", "")
             old, new = args.get("old_text", ""), args.get("new_text", "")
-
-            # Resolve against active workspace, not ~/ai-agent CWD
-            try:
-                from tools.filesystem import _safe_path, _PathError
-                p = _safe_path(path)
-            except _PathError as e:
-                return f"Error: {e}"
-            except Exception as e:
-                return f"Error resolving path {path}: {e}"
-
+            p = Path(path)
             if not p.exists():
                 return f"Error: File not found: {path}"
             original = p.read_text(encoding="utf-8", errors="ignore")
@@ -1883,9 +1889,6 @@ class OblivionApp(App):
 
 
 def main():
-    # Mark TUI mode so handlers/tools skip CLI-only Rich output & input prompts
-    import os as _os
-    _os.environ["OBLIVION_TUI"] = "1"
     # Pre-load Whisper model BEFORE Textual takes over the terminal.
     # This avoids multiprocessing/fds_to_keep errors when loading inside async.
     import os

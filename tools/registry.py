@@ -2,6 +2,26 @@ from tools.filesystem import read_file, write_file, list_dir, grep_files, file_e
 from tools.bash import run_bash
 from tools.edit_file import edit_file, insert_after
 from tools.search_code import search_code
+from tools.symbol_tools import find_symbol, list_symbols, find_callers, project_map
+from agent.brain import remember as _remember, recall as _recall, verify_code as _verify_code
+
+
+def remember(note: str, category: str = "general") -> str:
+    """Tool wrapper for remember()."""
+    return _remember(note, category)
+
+
+def recall(category: str = "") -> str:
+    """Tool wrapper for recall()."""
+    return _recall(category if category else None)
+
+
+def verify_code(path: str, language: str = "auto") -> str:
+    """Tool wrapper for verify_code() - returns formatted string."""
+    result = _verify_code(path, language)
+    if result["ok"]:
+        return f"VERIFIED: {result['message']}"
+    return f"FAILED: {result['message']}\n{result['details']}"
 
 TOOL_SCHEMAS = [
     {
@@ -88,6 +108,82 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "verify_code",
+        "description": (
+            "Run a syntax check on a file you just wrote or edited. "
+            "Use this AFTER write_file or edit_file to confirm no syntax errors. "
+            "Supports Python, JavaScript, TypeScript, JSON, Bash, YAML."
+        ),
+        "parameters": {
+            "path": {"type": "string", "description": "Path to file to verify", "required": True},
+            "language": {"type": "string", "description": "Language (auto-detected if omitted)", "required": False},
+        },
+    },
+    {
+        "name": "remember",
+        "description": (
+            "Save a lesson, convention, or important fact to project memory (MEMORY.md). "
+            "Use this when you learn something useful for FUTURE sessions: "
+            "code conventions, architecture decisions, gotchas, user preferences. "
+            "Categories: 'conventions', 'architecture', 'gotchas', 'preferences', 'general'."
+        ),
+        "parameters": {
+            "note": {"type": "string", "description": "Concise note to remember", "required": True},
+            "category": {"type": "string", "description": "Category bucket", "required": False},
+        },
+    },
+    {
+        "name": "recall",
+        "description": (
+            "Read project memory (MEMORY.md). Useful at the start of a complex task "
+            "to load conventions/lessons. Returns all memory or a single category."
+        ),
+        "parameters": {
+            "category": {"type": "string", "description": "Optional category to filter", "required": False},
+        },
+    },
+    {
+        "name": "find_symbol",
+        "description": (
+            "Find a function/class/method by EXACT name across the workspace. "
+            "Returns file:line + signature + docstring. INSTANT (no embedding). "
+            "Use this FIRST when the user mentions a specific symbol by name."
+        ),
+        "parameters": {
+            "name": {"type": "string", "description": "Symbol name (e.g. 'parse_llm_output')", "required": True},
+        },
+    },
+    {
+        "name": "list_symbols",
+        "description": (
+            "Outline a file: every function/class/method in declaration order with line ranges. "
+            "Use this to understand a file's structure before reading or editing it."
+        ),
+        "parameters": {
+            "file": {"type": "string", "description": "Workspace-relative path (e.g. 'agent/parser.py')", "required": True},
+        },
+    },
+    {
+        "name": "find_callers",
+        "description": (
+            "Find every chunk that references a symbol — excludes its definition. "
+            "Essential for rename refactors and impact analysis before editing."
+        ),
+        "parameters": {
+            "symbol_name": {"type": "string", "description": "Symbol to find references for", "required": True},
+        },
+    },
+    {
+        "name": "project_map",
+        "description": (
+            "Render a tree of the current workspace (folders + files). "
+            "Use this to understand the project's layout. Respects .git, node_modules, etc."
+        ),
+        "parameters": {
+            "max_depth": {"type": "integer", "description": "Tree depth (default 3, max 6)", "required": False},
+        },
+    },
+    {
         "name": "finish",
         "description": "Signal task is complete.",
         "parameters": {
@@ -107,6 +203,13 @@ TOOL_FUNCTIONS = {
     "file_exists":  file_exists,
     "create_dir":   create_dir,
     "run_bash":     run_bash,
+    "verify_code":  verify_code,
+    "find_symbol":   find_symbol,
+    "list_symbols":  list_symbols,
+    "find_callers":  find_callers,
+    "project_map":   project_map,
+    "remember":     remember,
+    "recall":       recall,
 }
 
 

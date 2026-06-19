@@ -15,6 +15,10 @@ from chromadb.config import Settings
 import httpx
 from dotenv import load_dotenv
 
+# Phase 2B.2: AST chunker + symbol index
+from agent.code_chunker import chunk_code, Chunk
+from agent import symbol_index as _symbols
+
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -122,23 +126,29 @@ def get_collection():
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
 def chunk_file(content: str, filename: str, max_lines: int = 50) -> list[dict]:
-    lines = content.splitlines()
-    chunks = []
-    overlap = 10
+    """Phase 2B.2: delegate to AST-aware chunker (agent/code_chunker.py).
 
-    i = 0
-    while i < len(lines):
-        chunk_lines = lines[i:i + max_lines]
-        chunk_text = "\n".join(chunk_lines)
-        if chunk_text.strip():
-            chunks.append({
-                "text": f"File: {filename}\nLines {i+1}-{i+len(chunk_lines)}:\n\n{chunk_text}",
-                "start_line": i + 1,
-                "end_line": i + len(chunk_lines),
-                "file": filename,
-            })
-        i += max_lines - overlap
-    return chunks
+    Returns dicts in the legacy shape so the rest of rag.py is unchanged:
+      {text, start_line, end_line, file}
+    PLUS extra keys consumers can use:
+      {type, name, signature, parent, docstring, _chunk_obj}
+    """
+    chunks = chunk_code(content, filename)
+    out = []
+    for c in chunks:
+        out.append({
+            "text": c.to_embedding_text(),
+            "start_line": c.start_line,
+            "end_line": c.end_line,
+            "file": c.file,
+            "type": c.type,
+            "name": c.name,
+            "signature": c.signature,
+            "parent": c.parent or "",
+            "docstring": c.docstring or "",
+            "_chunk_obj": c,
+        })
+    return out
 
 
 def should_index(path: Path) -> bool:
@@ -177,6 +187,7 @@ def _delete_chunks_for_file(collection, rel_path: str) -> int:
 def index_single_file(filepath: Path, root: Path = None) -> dict:
     """
     Index ONE file (used by file watcher).
+    Phase 2B.2: also populates the SQLite symbol index.
     Returns {chunks_added, deleted, status}.
     """
     root = root or WORKSPACE
@@ -186,6 +197,10 @@ def index_single_file(filepath: Path, root: Path = None) -> dict:
     # File deleted?
     if not filepath.exists():
         deleted = _delete_chunks_for_file(collection, rel_path)
+        try:
+            _symbols.clear_file(str(root), rel_path)
+        except Exception:
+            pass
         hashes = _load_hashes()
         ws_key = str(root)
         if ws_key in hashes and rel_path in hashes[ws_key]:
@@ -216,6 +231,10 @@ def index_single_file(filepath: Path, root: Path = None) -> dict:
     deleted = _delete_chunks_for_file(collection, rel_path)
     chunks = chunk_file(content, rel_path)
     if not chunks:
+        try:
+            _symbols.clear_file(str(root), rel_path)
+        except Exception:
+            pass
         hashes[ws_key][rel_path] = h
         _save_hashes(hashes)
         return {"status": "empty", "deleted": deleted, "chunks_added": 0}
@@ -229,14 +248,27 @@ def index_single_file(filepath: Path, root: Path = None) -> dict:
             ids.append(f"{rel_path}::{chunk['start_line']}-{chunk['end_line']}")
             embs.append(emb)
             docs.append(chunk["text"])
-            metas.append({
+            meta = {
                 "file": rel_path,
                 "start_line": chunk["start_line"],
                 "end_line": chunk["end_line"],
-            })
+            }
+            # Phase 2B.2: enrich metadata with AST info
+            for k in ("type", "name", "signature", "parent"):
+                v = chunk.get(k)
+                if v:
+                    meta[k] = v
+            metas.append(meta)
 
     if ids:
         collection.upsert(ids=ids, embeddings=embs, documents=docs, metadatas=metas)
+
+    # Phase 2B.2: also populate SQLite symbol index
+    try:
+        chunk_objs = [c["_chunk_obj"] for c in chunks if "_chunk_obj" in c]
+        _symbols.add_symbols(str(root), rel_path, chunk_objs)
+    except Exception:
+        pass
 
     hashes[ws_key][rel_path] = h
     _save_hashes(hashes)
@@ -244,10 +276,10 @@ def index_single_file(filepath: Path, root: Path = None) -> dict:
     return {"status": "indexed", "deleted": deleted, "chunks_added": len(ids)}
 
 
-# ── Full indexing (incremental) ───────────────────────────────────────────────
 def index_codebase(root: Path = None, verbose: bool = True, force: bool = False) -> dict:
     """
     Walk codebase and index only CHANGED files (via hash comparison).
+    Phase 2B.2: also rebuilds the SQLite symbol index for changed files.
     Pass force=True to re-embed everything regardless.
     """
     root = root or WORKSPACE
@@ -266,10 +298,15 @@ def index_codebase(root: Path = None, verbose: bool = True, force: bool = False)
         if verbose:
             print("⚡ Force mode: re-embedding everything")
         hashes[ws_key] = {}
+        try:
+            _symbols.clear_workspace(str(root))
+        except Exception:
+            pass
 
     # Collect chunks that need embedding
-    to_embed = []  # list of (chunk_id, text, metadata)
-    files_changed = []
+    to_embed = []                       # list of (chunk_id, text, metadata)
+    files_changed = []                  # rel_paths changed this run
+    chunks_by_file: dict[str, list] = {}  # rel_path -> chunk dicts (for symbol index)
 
     if verbose:
         print(f"📂 Scanning files...")
@@ -299,24 +336,34 @@ def index_codebase(root: Path = None, verbose: bool = True, force: bool = False)
 
         # Add new chunks to embed queue
         chunks = chunk_file(content, rel_path)
+        chunks_by_file[rel_path] = chunks
         for chunk in chunks:
             chunk_id = f"{rel_path}::{chunk['start_line']}-{chunk['end_line']}"
-            to_embed.append((
-                chunk_id,
-                chunk["text"],
-                {"file": rel_path, "start_line": chunk["start_line"], "end_line": chunk["end_line"]},
-            ))
+            meta = {
+                "file": rel_path,
+                "start_line": chunk["start_line"],
+                "end_line": chunk["end_line"],
+            }
+            for k in ("type", "name", "signature", "parent"):
+                v = chunk.get(k)
+                if v:
+                    meta[k] = v
+            to_embed.append((chunk_id, chunk["text"], meta))
 
         hashes[ws_key][rel_path] = h
         files_changed.append(rel_path)
 
-    # Detect deleted files - remove their chunks
+    # Detect deleted files - remove their chunks and symbols
     indexed_files = set(hashes[ws_key].keys())
     on_disk = {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file() and should_index(p)}
     removed_files = indexed_files - on_disk
     for rel in removed_files:
         deleted = _delete_chunks_for_file(collection, rel)
         stats["deleted"] += deleted
+        try:
+            _symbols.clear_file(str(root), rel)
+        except Exception:
+            pass
         del hashes[ws_key][rel]
         if verbose:
             print(f"  🗑️  Removed deleted file: {rel}")
@@ -356,12 +403,24 @@ def index_codebase(root: Path = None, verbose: bool = True, force: bool = False)
                 done = min((batch_idx + 1) * BATCH, len(to_embed))
                 print(f"  [{batch_idx+1}/{total_batches}] {done}/{len(to_embed)} ({done/len(to_embed)*100:.0f}%)")
 
+    # Phase 2B.2: rebuild SQLite symbol rows for every changed file
+    symbols_added = 0
+    for rel in files_changed:
+        chunks = chunks_by_file.get(rel, [])
+        chunk_objs = [c["_chunk_obj"] for c in chunks if "_chunk_obj" in c]
+        try:
+            symbols_added += _symbols.add_symbols(str(root), rel, chunk_objs)
+        except Exception:
+            pass
+    if verbose and symbols_added:
+        print(f"🧠 Symbol index updated: +{symbols_added} symbols across {len(files_changed)} files")
+
     stats["files_indexed"] = len(files_changed)
+    stats["symbols_added"] = symbols_added
     _save_hashes(hashes)
     return stats
 
 
-# ── Searching ─────────────────────────────────────────────────────────────────
 def search_code(query: str, n_results: int = 5) -> list[dict]:
     collection = get_collection()
     if collection.count() == 0:

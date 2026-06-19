@@ -863,11 +863,6 @@ class OblivionApp(App):
                     )
                     self.watcher.start()
                     log.write(f"[#00ff9f]◢ Watching {expanded} for changes[/#00ff9f]")
-                # Polish: also trigger background reindex like /openproject does
-                try:
-                    self._trigger_bg_reindex(Path(expanded).resolve())
-                except Exception:
-                    pass
             return True
 
         if command == "/newproject":
@@ -929,29 +924,13 @@ class OblivionApp(App):
 
         if command == "/openproject":
             if not arg:
-                log.write("[#ff006e]✗ Usage: /openproject <name-or-path>[/#ff006e]")
-                log.write("[dim]Examples:  /openproject myapp   |  /openproject /home/rohit/ai-agent  |  /openproject ~/code[/dim]")
+                log.write("[#ff006e]✗ Usage: /openproject <name>[/#ff006e]")
                 return True
-
-            raw = arg.strip()
             projects_root = Path.home() / "Projects"
-
-            # Accept either: name inside ~/Projects/, OR absolute/~-prefixed path
-            if raw.startswith("/") or raw.startswith("~") or raw.startswith("./") or raw.startswith("../"):
-                target = Path(raw).expanduser().resolve()
-            else:
-                # Try ~/Projects/<name> first, fall back to absolute resolve
-                p_proj = (projects_root / raw).resolve()
-                if p_proj.exists() and p_proj.is_dir():
-                    target = p_proj
-                else:
-                    # Maybe user typed a bare name that happens to be a directory in CWD or home
-                    p_alt = Path(raw).expanduser().resolve()
-                    target = p_alt
-
+            target = (projects_root / arg.strip()).resolve()
             if not target.exists() or not target.is_dir():
                 log.write(f"[#ff006e]✗ Not found: {target}[/#ff006e]")
-                log.write("[dim]Use /projects to list ~/Projects/ entries, or pass an absolute path.[/dim]")
+                log.write("[dim]Use /projects to list available projects.[/dim]")
                 return True
             os.environ["WORKSPACE_DIR"] = str(target)
             self._update_env("WORKSPACE_DIR", str(target))

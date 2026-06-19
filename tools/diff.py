@@ -62,7 +62,14 @@ def print_new_file(content: str, filename: str):
 
 
 def ask_approval(action: str) -> bool:
-    """Ask user to approve a change. Returns True if approved."""
+    """Ask user to approve a change. Returns True if approved.
+    In TUI mode (OBLIVION_TUI=1), auto-approves since the TUI has its own modal flow."""
+    import os
+    if os.getenv("OBLIVION_TUI", "0") == "1":
+        return True
     console.print()
-    response = input(f"  Apply {action}? [y/N]: ").strip().lower()
+    try:
+        response = input(f"  Apply {action}? [y/N]: ").strip().lower()
+    except (EOFError, OSError):
+        return False
     return response in ("y", "yes")
