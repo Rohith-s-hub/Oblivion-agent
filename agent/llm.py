@@ -82,12 +82,7 @@ class LLMClient:
 
     @classmethod
     def _load_exhausted(cls):
-        """Always start with empty exhausted set per session.
-
-        Persistence was causing models to be skipped FOREVER after one transient
-        failure. Now exhaustion is in-memory only, resets every restart.
-        """
-        # Delete any stale cache file from previous version
+        """In-memory only. Wipe any stale on-disk cache from old versions."""
         try:
             f = cls._exhausted_file()
             if f.exists():
@@ -98,7 +93,7 @@ class LLMClient:
 
     @classmethod
     def _save_exhausted(cls, models: set):
-        """No-op: exhaustion is in-memory only, doesn't persist across restarts."""
+        """No-op. Exhaustion is per-session only, never persisted."""
         pass
 
     # Loaded fresh from disk on each LLMClient instantiation
@@ -194,12 +189,18 @@ class LLMClient:
 
                 # Check if we should try the next fallback
                 retry_triggers = [
+                    # ONLY trigger fallback on EXPLICIT provider rejection
                     "ratelimiterror", "rate_limit", "rate limit",
                     "request too large", "context length", "context_length_exceeded",
-                    "tokens per minute", "tpm", "model is overloaded",
-                    "service unavailable", "503", "502", "504",
+                    "tokens per minute", "tpm",
                     "session usage limit", "quota", "exceeded",
-                    "connectionerror", "apiconnectionerror", "timeout",
+                    "tpd", "per day",
+                    # Model-specific (not network)
+                    "model is overloaded",
+                    "model_not_found",  # phantom model in chain
+                    # NOTE: Removed connectionerror/apiconnectionerror/timeout
+                    # Those are TRANSIENT - should retry SAME model, not failover
+                    # NOTE: Removed 503/502/504 - same reason (transient)
                 ]
                 should_retry = any(t in err_str for t in retry_triggers)
 
