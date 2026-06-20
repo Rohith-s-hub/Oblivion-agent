@@ -29,6 +29,66 @@ from typing import Any, Awaitable, Callable, Optional
 from agent.parser import parse_llm_output, ToolCall, FinalAnswer
 from tools.registry import dispatch
 
+
+def _estimate_tokens(messages: list) -> int:
+    """Rough token count: ~4 chars = 1 token."""
+    total = 0
+    for m in messages:
+        c = m.get("content", "")
+        if isinstance(c, str):
+            total += len(c) // 4
+    return total
+
+
+def _summarize_conversation(conversation: list, keep_recent: int = 4) -> list:
+    """Compress conversation: keep first user msg + summarize middle + keep last N turns.
+    
+    Returns new conversation list. Original is unchanged.
+    """
+    if len(conversation) <= keep_recent + 1:
+        return conversation  # too short to summarize
+
+    first_user = conversation[0]  # the original user task
+    recent = conversation[-keep_recent:]  # last N turns
+    middle = conversation[1:-keep_recent]  # to be summarized
+
+    # Extract key facts from middle
+    summary_parts = []
+    files_touched = set()
+    tools_used = {}
+    for msg in middle:
+        c = msg.get("content", "")
+        if not isinstance(c, str):
+            continue
+        # Tool observations
+        if c.startswith("OBSERVATION"):
+            # Extract filenames
+            import re
+            for m in re.finditer(r"(?:Written|Created|Edited|Read).+?([\w./\-_]+\.\w+)", c):
+                files_touched.add(m.group(1))
+            for m in re.finditer(r"(?:result of )(\w+)", c):
+                t = m.group(1)
+                tools_used[t] = tools_used.get(t, 0) + 1
+        # Agent THOUGHTs
+        elif "THOUGHT:" in c:
+            import re
+            m = re.search(r"THOUGHT:\s*(.+?)(?:\n|ACTION|FINAL)", c, re.DOTALL)
+            if m:
+                summary_parts.append(m.group(1).strip()[:120])
+
+    summary_text = "PREVIOUS CONVERSATION SUMMARY (compressed to save tokens):\n"
+    if files_touched:
+        summary_text += "Files already touched: " + ", ".join(sorted(files_touched)[:15]) + "\n"
+    if tools_used:
+        summary_text += "Tools used so far: " + ", ".join(f"{k}({v})" for k, v in sorted(tools_used.items())) + "\n"
+    if summary_parts:
+        summary_text += "Key decisions:\n" + "\n".join(f"- {s}" for s in summary_parts[-8:]) + "\n"
+    summary_text += "\nResume from current state. Do NOT redo what is listed above."
+
+    summary_msg = {"role": "user", "content": summary_text}
+
+    return [first_user, summary_msg] + recent
+
 # ── Session log ──────────────────────────────────────────────────────────────
 SESSIONS_DIR = Path.home() / ".ai-agent" / "sessions"
 SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
@@ -94,6 +154,11 @@ class AgentRuntime:
         cb = callbacks
 
         self.agent.conversation.append({"role": "user", "content": user_message})
+        # Refresh system prompt with knowledge packs relevant to this user request
+        try:
+            self.agent.refresh_prompt(user_message)
+        except Exception:
+            pass  # best-effort; never break the loop
         _log_event(self.session_id, "user_message", {"content": user_message})
 
         # LOOP DETECTION: track recent tool calls to catch the agent repeating itself
@@ -107,6 +172,27 @@ class AgentRuntime:
                     await cb.on_llm_start(step)
                 except Exception:
                     pass
+
+            # AUTO-SUMMARIZATION: if conversation is getting big, compress middle
+            est_tokens = _estimate_tokens(self.agent.conversation)
+            if est_tokens > 6000 and len(self.agent.conversation) > 6:
+                original_count = len(self.agent.conversation)
+                self.agent.conversation = _summarize_conversation(self.agent.conversation, keep_recent=4)
+                new_count = len(self.agent.conversation)
+                new_tokens = _estimate_tokens(self.agent.conversation)
+                _log_event(self.session_id, "summarized", {
+                    "before_msgs": original_count, "after_msgs": new_count,
+                    "before_tokens": est_tokens, "after_tokens": new_tokens,
+                })
+                if cb.on_thought:
+                    try:
+                        await cb.on_thought(
+                            "[context compressed: " + str(original_count) + " msgs / " +
+                            str(est_tokens) + " tok -> " + str(new_count) + " msgs / " +
+                            str(new_tokens) + " tok]"
+                        )
+                    except Exception:
+                        pass
 
             messages = [
                 {"role": "system", "content": self.agent.system_prompt}
@@ -191,12 +277,30 @@ class AgentRuntime:
 
                 # APPROVAL for sensitive tools
                 approved = True
-                if tool_name in ("write_file", "edit_file", "run_bash"):
+                needs_approval = tool_name in ("write_file", "edit_file", "run_bash")
+
+                # HARD SAFETY: rm -rf and other destructive bash always need approval
+                if tool_name == "run_bash":
+                    try:
+                        from tools.bash import is_dangerous_command
+                        if is_dangerous_command(tool_args.get("command", "")):
+                            needs_approval = True
+                            _log_event(self.session_id, "danger_detected", {
+                                "command": tool_args.get("command", "")[:200]
+                            })
+                    except ImportError:
+                        pass
+
+                if needs_approval:
                     if cb.on_approve_tool:
                         try:
                             approved = await cb.on_approve_tool(tool_name, tool_args)
                         except Exception:
                             approved = False
+                    else:
+                        # No approval callback registered = treat as denied for safety
+                        approved = False
+                        result = "BLOCKED: " + tool_name + " requires approval but no approval handler is registered."
 
                 # Execute
                 t0 = time.perf_counter()
@@ -246,7 +350,11 @@ class AgentRuntime:
             })
 
         # Loop budget exhausted
-        msg = "Reached maximum iterations without completing the task."
+        msg = (
+            "Hit the " + str(self.max_iterations) + "-iteration budget without finishing.\n\n"
+            "Progress is preserved in the conversation. Type /continue to resume with a fresh budget, "
+            "or give a new instruction to refocus the work."
+        )
         _log_event(self.session_id, "max_iterations", {"limit": self.max_iterations})
         if cb.on_final:
             try:
