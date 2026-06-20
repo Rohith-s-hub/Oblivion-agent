@@ -82,20 +82,24 @@ class LLMClient:
 
     @classmethod
     def _load_exhausted(cls):
+        """Always start with empty exhausted set per session.
+
+        Persistence was causing models to be skipped FOREVER after one transient
+        failure. Now exhaustion is in-memory only, resets every restart.
+        """
+        # Delete any stale cache file from previous version
         try:
             f = cls._exhausted_file()
             if f.exists():
-                return set(line.strip() for line in f.read_text().splitlines() if line.strip())
+                f.unlink()
         except Exception:
             pass
         return set()
 
     @classmethod
     def _save_exhausted(cls, models: set):
-        try:
-            cls._exhausted_file().write_text("\n".join(sorted(models)) + "\n")
-        except Exception:
-            pass
+        """No-op: exhaustion is in-memory only, doesn't persist across restarts."""
+        pass
 
     # Loaded fresh from disk on each LLMClient instantiation
     _exhausted_models: set = set()
@@ -154,6 +158,7 @@ class LLMClient:
                     "decommissioned",         # Model permanently retired
                 ]
                 # IMPORTANT: do NOT include "rate_limit_exceeded", "tokens per minute",
+                "tokens per day", "tpd", "rate_limit_exceeded",
                 # "tpm", "quota", "exceeded" alone — those are TRANSIENT per-minute limits
                 # that reset in 60s. Marking them as permanent breaks everything.
                 is_permanent = any(t in err_str for t in permanent_quota_triggers)
