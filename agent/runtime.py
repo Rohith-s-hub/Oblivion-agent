@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from agent.parser import parse_llm_output, ToolCall, FinalAnswer
+from agent.parser import parse_llm_output, ToolCall, FinalAnswer, is_garbage_output
 from tools.registry import dispatch
 
 
@@ -163,6 +163,7 @@ class AgentRuntime:
 
         # LOOP DETECTION: track recent tool calls to catch the agent repeating itself
         recent_calls: list[str] = []
+        consecutive_reads = 0  # exploration loop guard
 
         for i in range(self.max_iterations):
             step = i + 1
@@ -332,6 +333,36 @@ class AgentRuntime:
                         "Continue: next THOUGHT + ACTION, or FINAL_ANSWER."
                     ),
                 })
+
+                # EXPLORATION LOOP GUARD: count read-only calls in a row
+                READ_ONLY_TOOLS = {
+                    "read_file", "list_dir", "grep_files", "file_exists",
+                    "search_code", "find_symbol", "list_symbols",
+                    "find_callers", "project_map", "recall",
+                }
+                if tool_name in READ_ONLY_TOOLS:
+                    consecutive_reads += 1
+                else:
+                    consecutive_reads = 0
+
+                if consecutive_reads >= 5:
+                    _log_event(self.session_id, "exploration_loop", {
+                        "step": step, "reads_count": consecutive_reads,
+                    })
+                    self.agent.conversation.append({
+                        "role": "user",
+                        "content": (
+                            "EXPLORATION LIMIT REACHED. You have made "
+                            + str(consecutive_reads)
+                            + " read/search calls in a row without writing any code. "
+                            "STOP exploring. You have enough context. Either:\n"
+                            "(a) Write the NEXT file with write_file, OR\n"
+                            "(b) Give FINAL_ANSWER with what you've learned so far.\n"
+                            "Do NOT call another read/search tool until you do one of the above."
+                        ),
+                    })
+                    consecutive_reads = 0
+
                 continue
 
             # ─── Parser failure
