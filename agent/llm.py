@@ -21,6 +21,8 @@ class LLMClient:
         # Token tracking (cumulative across all calls in this session)
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+        # Load persisted exhausted models from disk
+        LLMClient._exhausted_models = LLMClient._load_exhausted()
 
     @property
     def model(self) -> str:
@@ -58,45 +60,172 @@ class LLMClient:
             console.print(f"[red]LLM Error: {e}[/red]")
             raise
 
-    FALLBACK_MODEL = "ollama/qwen3-coder:480b-cloud"
+    # Smart fallback chain: try these in order if primary fails.
+    # All Groq models verified live as of fix date.
+    # Ordering: code-specialist first, then large generalists, then fast small, then Ollama.
+    FALLBACK_CHAIN = [
+        # Try multiple Groq models BEFORE ever touching Ollama (which is quota-exhausted)
+        # Llama family (fast, no <think> overhead)
+        "groq/llama-3.3-70b-versatile",
+        "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+        # GPT-OSS family (very large context)
+        "groq/openai/gpt-oss-120b",
+        "groq/openai/gpt-oss-20b",
+        # Qwen3 family (CODE specialist, but slow due to thinking)
+        "groq/qwen/qwen3-32b",
+        # Fast small model (last Groq resort)
+        "groq/llama-3.1-8b-instant",
+        # Ollama Cloud absolutely last (quota-limited)
+        "ollama/qwen3-coder:480b-cloud",
+    ]
+    # Track which models are known-exhausted (persisted across restarts)
+    @classmethod
+    def _exhausted_file(cls):
+        from pathlib import Path as _P
+        d = _P.home() / ".ai-agent"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "exhausted_models.txt"
+
+    @classmethod
+    def _load_exhausted(cls):
+        try:
+            f = cls._exhausted_file()
+            if f.exists():
+                return set(line.strip() for line in f.read_text().splitlines() if line.strip())
+        except Exception:
+            pass
+        return set()
+
+    @classmethod
+    def _save_exhausted(cls, models: set):
+        try:
+            cls._exhausted_file().write_text("\n".join(sorted(models)) + "\n")
+        except Exception:
+            pass
+
+    # Loaded fresh from disk on each LLMClient instantiation
+    _exhausted_models: set = set()
 
     def chat_stream(
         self,
         messages: list,
         on_token: Optional[Callable[[str], None]] = None,
     ) -> str:
-        """Streaming chat with callback (used by TUI).
-        Auto-falls back to qwen-coder on rate limit / context errors.
+        """Streaming chat with smart multi-model fallback.
+
+        Tries primary model first. On rate-limit / quota / overload errors,
+        walks the FALLBACK_CHAIN, skipping any model already known to be exhausted.
         """
         primary_model = self.model
-        try:
-            return self._stream_with_model(primary_model, messages, on_token)
-        except Exception as e:
-            error_msg = str(e).lower()
-            # Decide if we should fallback
-            fallback_triggers = [
-                "ratelimiterror", "rate_limit", "rate limit",
-                "request too large", "context length", "context_length_exceeded",
-                "tokens per minute", "tpm", "model is overloaded",
-                "service unavailable", "503",
-            ]
-            should_fallback = any(t in error_msg for t in fallback_triggers)
 
-            if should_fallback and primary_model != self.FALLBACK_MODEL:
-                console.print(
-                    f"[yellow]⚠ {primary_model} failed ({type(e).__name__}). "
-                    f"Falling back to qwen-coder...[/yellow]"
+        # Build attempt order: primary first, then chain (excluding primary + exhausted)
+        attempts = [primary_model] + [
+            m for m in self.FALLBACK_CHAIN
+            if m != primary_model and m not in self._exhausted_models
+        ]
+
+        # If primary itself is exhausted, skip it
+        if primary_model in self._exhausted_models:
+            attempts = attempts[1:]
+
+        # SAFETY NET: if ALL models are marked exhausted (broken state), reset and try primary
+        if not attempts:
+            console.print("[yellow]All models marked exhausted - auto-clearing cache and force-retrying primary.[/yellow]")
+            self._exhausted_models.clear()
+            LLMClient._save_exhausted(set())
+            attempts = [primary_model]
+
+        last_err = None
+        for i, model in enumerate(attempts):
+            try:
+                if i > 0:
+                    # We're on a fallback - tell the user
+                    short = model.split("/")[-1][:30]
+                    if on_token:
+                        on_token("\n[yellow]Falling back to " + short + "...[/yellow]\n")
+                    console.print("[yellow]Fallback attempt: " + model + "[/yellow]")
+                return self._stream_with_model(model, messages, on_token)
+            except Exception as e:
+                last_err = e
+                err_str = str(e).lower()
+
+                # Mark model as PERMANENTLY exhausted ONLY for true quota-out errors
+                # (NOT for transient rate limits, which "rate_limit_exceeded" implies)
+                permanent_quota_triggers = [
+                    "session usage limit",   # Ollama Cloud: out of free messages for the session
+                    "monthly limit",          # Hard monthly cap
+                    "upgrade for higher",     # Generic "you maxed out, pay"
+                    "credit balance",         # Out of paid credits
+                    "insufficient_quota",     # OpenAI: out of paid quota
+                    "decommissioned",         # Model permanently retired
+                ]
+                # IMPORTANT: do NOT include "rate_limit_exceeded", "tokens per minute",
+                # "tpm", "quota", "exceeded" alone — those are TRANSIENT per-minute limits
+                # that reset in 60s. Marking them as permanent breaks everything.
+                is_permanent = any(t in err_str for t in permanent_quota_triggers)
+                if is_permanent:
+                    self._exhausted_models.add(model)
+                    LLMClient._save_exhausted(self._exhausted_models)
+                    console.print("[red]Model " + model + " PERMANENTLY exhausted (persisted). Use '/model reset' to clear.[/red]")
+                else:
+                    # Transient rate-limit: don't persist, just log
+                    if "rate" in err_str or "tpm" in err_str or "tokens per minute" in err_str:
+                        console.print("[yellow]Transient rate limit on " + model + " (not persisting).[/yellow]")
+
+                # If Groq rate-limited THIS specific model, wait a few seconds and retry SAME model
+                # (rate limits are per-minute and short; don't waste fallbacks on transient errors)
+                is_groq_rate_limit = (
+                    model.startswith("groq/") and
+                    any(t in err_str for t in ["ratelimiterror", "rate_limit", "rate limit", "tokens per minute", "tpm"])
                 )
-                if on_token:
-                    on_token(f"\n[yellow]⚠ Fallback to qwen-coder due to: {type(e).__name__}[/yellow]\n")
-                try:
-                    return self._stream_with_model(self.FALLBACK_MODEL, messages, on_token)
-                except Exception as fallback_err:
-                    console.print(f"[red]Fallback also failed: {fallback_err}[/red]")
+                if is_groq_rate_limit:
+                    import time as _t
+                    wait = 10  # seconds
+                    console.print("[yellow]Groq rate limit on " + model + ". Waiting " + str(wait) + "s and retrying same model...[/yellow]")
+                    if on_token:
+                        on_token("\n[yellow]Rate limited. Waiting " + str(wait) + "s...[/yellow]\n")
+                    _t.sleep(wait)
+                    try:
+                        return self._stream_with_model(model, messages, on_token)
+                    except Exception as e2:
+                        # Still failed - fall through to next model in chain
+                        last_err = e2
+                        err_str = str(e2).lower()
+                        console.print("[yellow]Still rate-limited after wait, falling to next model...[/yellow]")
+
+                # Check if we should try the next fallback
+                retry_triggers = [
+                    "ratelimiterror", "rate_limit", "rate limit",
+                    "request too large", "context length", "context_length_exceeded",
+                    "tokens per minute", "tpm", "model is overloaded",
+                    "service unavailable", "503", "502", "504",
+                    "session usage limit", "quota", "exceeded",
+                    "connectionerror", "apiconnectionerror", "timeout",
+                ]
+                should_retry = any(t in err_str for t in retry_triggers)
+
+                if not should_retry:
+                    # Hard error (auth, bad request, etc) - don't keep trying
+                    console.print("[red]Hard LLM error (not retrying): " + str(e)[:200] + "[/red]")
                     raise
-            # Not a fallback-able error, or already on fallback model
-            console.print(f"[red]LLM Error: {e}[/red]")
-            raise
+
+                # Soft error - continue to next model in chain
+                console.print("[yellow]Model " + model + " failed: " + type(e).__name__ + ". Trying next...[/yellow]")
+                continue
+
+        # All models exhausted
+        console.print("[red]All models in fallback chain exhausted![/red]")
+        if on_token:
+            on_token("\n[red]All available models failed. Try /model to pick one manually, or wait for quota reset.[/red]\n")
+        if last_err:
+            raise last_err
+        raise RuntimeError("All LLM models failed and no error was captured")
+
+    def reset_exhausted_models(self):
+        """Clear the exhausted-models cache (useful after quota resets)."""
+        self._exhausted_models.clear()
+        LLMClient._save_exhausted(set())
+        console.print("[green]Exhausted-models cache cleared (disk + memory).[/green]")
 
     def _stream_with_model(self, model: str, messages: list, on_token) -> str:
         """Internal: actual streaming call to a specific model."""
