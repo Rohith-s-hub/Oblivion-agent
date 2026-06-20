@@ -159,8 +159,8 @@ class LLMClient:
                 is_permanent = any(t in err_str for t in permanent_quota_triggers)
                 if is_permanent:
                     self._exhausted_models.add(model)
-                    LLMClient._save_exhausted(self._exhausted_models)
-                    console.print("[red]Model " + model + " PERMANENTLY exhausted (persisted). Use '/model reset' to clear.[/red]")
+                    # _save_exhausted is no-op (session-only now)
+                    console.print("[yellow]Model " + model + " marked exhausted for this session. Will retry on next restart, or use '/model reset' now.[/yellow]")
                 else:
                     # Transient rate-limit: don't persist, just log
                     if "rate" in err_str or "tpm" in err_str or "tokens per minute" in err_str:
