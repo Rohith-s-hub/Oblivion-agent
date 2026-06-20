@@ -64,19 +64,13 @@ class LLMClient:
     # All Groq models verified live as of fix date.
     # Ordering: code-specialist first, then large generalists, then fast small, then Ollama.
     FALLBACK_CHAIN = [
-        # Try multiple Groq models BEFORE ever touching Ollama (which is quota-exhausted)
-        # Llama family (fast, no <think> overhead)
-        "groq/llama-3.3-70b-versatile",
-        "groq/meta-llama/llama-4-scout-17b-16e-instruct",
-        # GPT-OSS family (very large context)
-        "groq/openai/gpt-oss-120b",
-        "groq/openai/gpt-oss-20b",
-        # Qwen3 family (CODE specialist, but slow due to thinking)
-        "groq/qwen/qwen3-32b",
-        # Fast small model (last Groq resort)
-        "groq/llama-3.1-8b-instant",
-        # Ollama Cloud absolutely last (quota-limited)
+        # Ollama Cloud qwen3-coder — NO rate limit, handles huge prompts
         "ollama/qwen3-coder:480b-cloud",
+        # Then Groq models (rate-limited but fast for small prompts)
+        "groq/llama-3.3-70b-versatile",
+        "groq/openai/gpt-oss-120b",
+        "groq/qwen/qwen3-32b",
+        "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     ]
     # Track which models are known-exhausted (persisted across restarts)
     @classmethod
