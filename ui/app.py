@@ -490,28 +490,23 @@ class OblivionApp(App):
         msgs = len(self.agent.conversation) if self.agent else 0
         workspace = os.path.basename(os.getenv("WORKSPACE_DIR", ".")) or "root"
         model_name = os.getenv("DEFAULT_MODEL", "none").split("/")[-1][:20]
-
-        # Token counter
         try:
             tokens = self.agent.llm.get_token_stats()
-            tok_str = f"tok:{tokens['total']:,}"
+            tok_str = "tok:" + str(tokens["total"])
         except Exception:
             tok_str = "tok:0"
-
-        # Status indicator
         if self.agent_busy:
-            status = "[bold yellow]thinking[/bold yellow]"
+            status = "thinking"
         else:
-            status = "[bold green]ready[/bold green]"
-
+            status = "ready"
         return (
-            f" {status}"
-            f"  [dim]|[/dim]  [bold]{model_name}[/bold]"
-            f"  [dim]|[/dim]  {workspace}"
-            f"  [dim]|[/dim]  msg:{msgs}"
-            f"  [dim]|[/dim]  {tok_str}"
-            f"  [dim]|[/dim]  step:{self.iteration_count}"
-            f"  [dim]|[/dim]  [dim]^Q quit  ^H help[/dim]"
+            " " + status
+            + "  |  " + model_name
+            + "  |  " + workspace
+            + "  |  msg:" + str(msgs)
+            + "  |  " + tok_str
+            + "  |  step:" + str(self.iteration_count)
+            + "  |  ^Q quit  ^H help"
         )
 
 
@@ -796,6 +791,23 @@ class OblivionApp(App):
                 self._run_agent("Continue the previous task from where you left off. Use the conversation history to know what files are already done and what still needs to be built."),
                 exclusive=True,
             )
+            return True
+
+        if command == "/demo":
+            log = self.query_one("#chat-log", RichLog)
+            log.write("[bold #febc2e]YOU:[/bold #febc2e] Build me a React portfolio")
+            log.write("")
+            import time as _t
+            log.write("[bold #7b8cde]M.E.E.R.A:[/bold #7b8cde] Planning 7 files...")
+            log.write("  1. package.json")
+            log.write("  2. vite.config.ts")
+            log.write("  3. tsconfig.json")
+            log.write("  4. src/main.tsx")
+            log.write("  5. src/App.tsx")
+            log.write("  6. src/index.css")
+            log.write("  7. index.html")
+            log.write("")
+            log.write("[green]Done:[/green] 7 files created. Run npm install then npm run dev.")
             return True
 
         if command == "/help":
