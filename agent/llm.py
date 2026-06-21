@@ -73,6 +73,8 @@ class LLMClient:
         # QUATERNARY: Other Groq options
         "groq/openai/gpt-oss-120b",
         "groq/meta-llama/llama-4-scout-17b-16e-instruct",
+        # EXTRA FREE: Cerebras (very fast, generous limits)
+        "cerebras/llama-3.3-70b",
     ]
     # Track which models are known-exhausted (persisted across restarts)
     @classmethod

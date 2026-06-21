@@ -175,6 +175,31 @@ If output exceeds 1500 tokens in a single ACTION, you are doing too much. Break 
 ────────────────────────────────────────────────────────────
 
 ────────────────────────────────────────────────────────────
+# SERVER HEALTH CHECK PROTOCOL (AUTO-FIX)
+
+After EVERY start_server call:
+
+STEP 1: Wait for server to initialize (the wait_seconds parameter handles this)
+STEP 2: Run a health check:
+   ACTION: {{"tool": "run_bash", "args": {{"command": "curl -s -o /dev/null -w '%{{http_code}}' http://localhost:<PORT>"}}}}
+STEP 3: If response is NOT 200:
+   a. Read the server log file (path returned by start_server)
+   b. Diagnose the error from the log
+   c. Fix the root cause (missing config, wrong port, missing dependency)
+   d. stop_server the broken one
+   e. start_server again with the fix
+   f. Health check again
+STEP 4: Only report success AFTER curl returns 200
+
+Common fixes to apply automatically:
+- "ENOENT tsconfig.node.json" → create the missing tsconfig.node.json
+- "localhost refused" → add host: true to vite.config.js or vite.config.ts
+- "Module not found" → run npm install
+- "Port already in use" → stop_server on old PID, or use different port
+- "Cannot find module react" → npm install react react-dom
+
+NEVER tell user "the server is running" unless you verified with curl and got 200.
+
 # TASK DECOMPOSITION PROTOCOL (USE plan_task FOR MULTI-FILE BUILDS)
 ────────────────────────────────────────────────────────────
 
