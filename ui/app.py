@@ -488,36 +488,32 @@ class OblivionApp(App):
 
     def _status_text(self) -> str:
         msgs = len(self.agent.conversation) if self.agent else 0
-        workspace = os.path.basename(os.getenv("WORKSPACE_DIR", ".")) or "/"
+        workspace = os.path.basename(os.getenv("WORKSPACE_DIR", ".")) or "root"
+        model_name = os.getenv("DEFAULT_MODEL", "none").split("/")[-1][:20]
 
-        # Get model info with provider color
-        model_info = get_current_model_info()
-        model_label = model_info["name"]
-        model_color = model_info.get("color", "#888888")  # fallback if missing
+        # Token counter
+        try:
+            tokens = self.agent.llm.get_token_stats()
+            tok_str = f"tok:{tokens['total']:,}"
+        except Exception:
+            tok_str = "tok:0"
 
-        # Pulse when busy
+        # Status indicator
         if self.agent_busy:
-            self._pulse_idx = (self._pulse_idx + 1) % len(PULSE_FRAMES)
-            pulse = f"[#febc2e]{PULSE_FRAMES[self._pulse_idx]}[/#febc2e]"
-            status_color = "#ffea00"
+            status = "[bold yellow]thinking[/bold yellow]"
         else:
-            pulse = "[#7b8cde]●[/#7b8cde]"
-            status_color = "#7b8cde"
-
-        # Paid model warning
-        paid_warn = ""
-        if "$" in model_info.get("cost", ""):
-            paid_warn = " [bold #febc2e]💰[/bold #febc2e]"
+            status = "[bold green]ready[/bold green]"
 
         return (
-            f"{pulse} [bold {status_color}]{self.current_status}[/bold {status_color}]"
-            f"  [dim]│[/dim]  [#9aa0b8]◆ {workspace}[/#9aa0b8]"
-            f"  [dim]│[/dim]  [bold {model_color}]⬢ {model_label}[/bold {model_color}]{paid_warn}"
-            f"  [dim]│[/dim]  [#febc2e]session {self.session_id or '-'}[/#febc2e]"
-            f"  [dim]│[/dim]  msg {msgs}  step {self.iteration_count}"
-            f"  [dim]│[/dim]  [dim]^Q quit ^H help[/dim]"
-            f"{self._render_waveform()}"
+            f" {status}"
+            f"  [dim]|[/dim]  [bold]{model_name}[/bold]"
+            f"  [dim]|[/dim]  {workspace}"
+            f"  [dim]|[/dim]  msg:{msgs}"
+            f"  [dim]|[/dim]  {tok_str}"
+            f"  [dim]|[/dim]  step:{self.iteration_count}"
+            f"  [dim]|[/dim]  [dim]^Q quit  ^H help[/dim]"
         )
+
 
     def _render_waveform(self) -> str:
         """Pattern G: cyan waveform for M.E.E.R.A. — flat when idle, pulsing when speaking."""
