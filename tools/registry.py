@@ -1,6 +1,6 @@
 from tools.filesystem import read_file, write_file, list_dir, grep_files, file_exists, create_dir, new_workspace
 from tools.planner import plan_task
-from tools.bash import run_bash
+from tools.bash import run_bash, start_server, list_servers, stop_server
 from tools.edit_file import edit_file, insert_after
 from tools.search_code import search_code
 from tools.symbol_tools import find_symbol, list_symbols, find_callers, project_map
@@ -199,6 +199,30 @@ TOOL_SCHEMAS = [
             "max_depth": {"type": "integer", "description": "Tree depth (default 3, max 6)", "required": False},
         },
     },
+        {
+        "name": "start_server",
+        "description": (
+            "Start a development server (npm run dev, python manage.py runserver, etc.) "
+            "in the background. Returns PID and log file path. Server runs until stopped."
+        ),
+        "parameters": {
+            "command": {"type": "string", "description": "Shell command to start the server", "required": True},
+            "port": {"type": "integer", "description": "Expected port (for health check)", "required": False},
+            "wait_seconds": {"type": "integer", "description": "Seconds to wait before checking (default 3)", "required": False},
+        },
+    },
+    {
+        "name": "list_servers",
+        "description": "List all running background servers started by start_server.",
+        "parameters": {},
+    },
+    {
+        "name": "stop_server",
+        "description": "Stop a background server by its PID.",
+        "parameters": {
+            "pid": {"type": "integer", "description": "Process ID to stop", "required": True},
+        },
+    },
     {
         "name": "plan_task",
         "description": (
@@ -240,6 +264,9 @@ TOOL_FUNCTIONS = {
     "remember":     remember,
     "recall":       recall,
     "plan_task":    plan_task,
+    "start_server": start_server,
+    "list_servers":  list_servers,
+    "stop_server":   stop_server,
 }
 
 
