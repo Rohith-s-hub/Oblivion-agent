@@ -472,7 +472,7 @@ class OblivionApp(App):
         # Get model info with provider color
         model_info = get_current_model_info()
         model_label = model_info["name"]
-        model_color = model_info["color"]
+        model_color = model_info.get("color", "#888888")  # fallback if missing
 
         # Pulse when busy
         if self.agent_busy:
