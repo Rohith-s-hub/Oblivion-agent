@@ -55,7 +55,7 @@ SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇",
 PULSE_FRAMES = ["●", "◉", "○", "◌", "○", "◉"]
 
 # Rotating accent colors for active state
-ACCENT_COLORS = ["#7b8cde", "#9aa0b8", "#3e4560", "#febc2e"]
+ACCENT_COLORS = ["#00ff9f", "#00d9ff", "#b537f2", "#ff006e"]
 
 
 SLASH_COMMANDS = [
@@ -139,37 +139,37 @@ class ApprovalModal(ModalScreen[bool]):
             target = self.title_text.rstrip("?").strip()
 
         info_text = (
-            "[#7b8cde]\u25c6 TYPE   [/#7b8cde] [bold white]" + op_type + "[/bold white]\n"
-            "[#7b8cde]\u25c6 TARGET [/#7b8cde] [bold #9aa0b8]" + target + "[/bold #9aa0b8]\n"
-            "[#7b8cde]\u25c6 DETAIL [/#7b8cde] [dim white]" + self.body_text + "[/dim white]"
+            "[#00ff9f]\u25c6 TYPE   [/#00ff9f] [bold white]" + op_type + "[/bold white]\n"
+            "[#00ff9f]\u25c6 TARGET [/#00ff9f] [bold #00d9ff]" + target + "[/bold #00d9ff]\n"
+            "[#00ff9f]\u25c6 DETAIL [/#00ff9f] [dim white]" + self.body_text + "[/dim white]"
         )
 
         with Container(id="modal-container"):
             yield Label(
-                "[bold #7b8cde]CONFIRM ACTION[/bold #7b8cde]",
+                "[bold #ff006e]\u25e2 AWAITING APPROVAL \u25e3[/bold #ff006e]",
                 id="modal-header",
             )
             yield Static(info_text, id="modal-info")
 
             if self.diff_text:
                 yield Label(
-                    "[bold #3e4560]\u25e2 DIFF PREVIEW \u25e3[/bold #3e4560]",
+                    "[bold #b537f2]\u25e2 DIFF PREVIEW \u25e3[/bold #b537f2]",
                     id="modal-diff-label",
                 )
                 yield Static(self._format_diff(), id="modal-diff")
 
             yield Static(
-                "[bold #7b8cde][Y][/bold #7b8cde] [white]or[/white] "
-                "[bold #7b8cde][ENTER][/bold #7b8cde]  [dim]approve[/dim]"
+                "[bold #00ff9f][Y][/bold #00ff9f] [white]or[/white] "
+                "[bold #00ff9f][ENTER][/bold #00ff9f]  [dim]approve[/dim]"
                 "        "
-                "[bold #febc2e][N][/bold #febc2e] [white]or[/white] "
-                "[bold #febc2e][ESC][/bold #febc2e]  [dim]deny[/dim]",
+                "[bold #ff006e][N][/bold #ff006e] [white]or[/white] "
+                "[bold #ff006e][ESC][/bold #ff006e]  [dim]deny[/dim]",
                 id="modal-hints",
             )
 
             with Horizontal(id="modal-buttons"):
-                yield Button("\u25cb  approve", id="btn-approve")
-                yield Button("\u25cb  deny", id="btn-deny")
+                yield Button("\u2713 APPROVE", variant="success", id="btn-approve")
+                yield Button("\u2717 DENY", variant="error", id="btn-deny")
 
     def _format_diff(self) -> Text:
         text = Text()
@@ -250,76 +250,76 @@ class ActivityItem(Static):
 class OblivionApp(App):
     CSS = """
     Screen {
-        background: #0d0f14;
+        background: #0a0a0f;
     }
     
     Header {
-        background: #13162a;
-        color: #7b8cde;
+        background: #1a0a2e;
+        color: #00ff9f;
     }
     
     Footer {
-        background: #13162a;
-        color: #febc2e;
+        background: #1a0a2e;
+        color: #ff006e;
     }
 
     #main-container { height: 100%; }
 
     #chat-panel {
         width: 65%;
-        border: round #febc2e;
+        border: round #ff006e;
         padding: 0 1;
-        background: #0d0f14;
+        background: #0a0a0f;
     }
 
     #side-panel { width: 35%; }
 
     #activity-panel {
         height: 60%;
-        border: round #7b8cde;
+        border: round #00ff9f;
         padding: 0 1;
-        background: #0b0d13;
+        background: #0f0a14;
     }
 
     #workspace-panel {
         height: 40%;
-        border: round #3e4560;
+        border: round #b537f2;
         padding: 0 1;
-        background: #0b0d13;
+        background: #0f0a14;
     }
 
     #input-box {
         dock: bottom;
         height: 3;
-        border: round #9aa0b8;
+        border: round #00d9ff;
         margin: 0 1;
-        background: #0d0f14;
-        color: #7b8cde;
+        background: #0a0a0f;
+        color: #00ff9f;
     }
 
     Input:focus {
-        border: round #7b8cde;
+        border: round #00ff9f;
     }
 
     #status-bar {
         height: 1;
-        background: #13162a;
-        color: #7b8cde;
+        background: #1a0a2e;
+        color: #00ff9f;
         padding: 0 1;
     }
 
     ApprovalModal {
         align: center middle;
-        background: rgba(10, 12, 17, 0.85);
+        background: rgba(0, 0, 0, 0.7);
     }
 
     #modal-container {
-        width: 75;
-        max-width: 100;
+        width: 85;
+        max-width: 110;
         height: auto;
-        max-height: 85%;
-        background: #0d0f14;
-        border: tall #1e2130;
+        max-height: 90%;
+        background: #0a0a0f;
+        border: thick #00d9ff;
         padding: 1 2;
     }
 
@@ -327,32 +327,29 @@ class OblivionApp(App):
         text-align: center;
         width: 100%;
         margin-bottom: 1;
-        color: #7b8cde;
     }
 
     #modal-info {
         margin-bottom: 1;
         padding: 1 2;
-        background: #13162a;
-        border: tall #2a2d46;
+        background: #0f0a14;
+        border: round #b537f2;
         height: auto;
-        color: #c8cdd8;
     }
 
     #modal-diff-label {
         text-align: center;
         width: 100%;
-        color: #7b8cde;
     }
 
     #modal-diff {
         margin-bottom: 1;
         padding: 1;
-        background: #0b0d13;
-        border-left: tall #7b8cde44;
+        background: #0f0a14;
+        border: round #b537f2;
         max-height: 18;
         overflow-y: auto;
-        color: #9aa0b8;
+        color: #ffffff;
     }
 
     #modal-hints {
@@ -361,7 +358,9 @@ class OblivionApp(App):
         margin-top: 1;
         margin-bottom: 1;
         padding: 1 0;
-        color: #3e4560;
+        background: #1a0a2e;
+        border-top: solid #00ff9f;
+        border-bottom: solid #00ff9f;
     }
 
     #modal-buttons {
@@ -371,35 +370,15 @@ class OblivionApp(App):
 
     #modal-buttons Button {
         margin: 0 2;
-        min-width: 18;
-    }
-
-    #btn-approve {
-        background: #13162a;
-        border: tall #1db954;
-        color: #1db954;
-    }
-
-    #btn-approve:hover {
-        background: #1a2a1a;
-    }
-
-    #btn-deny {
-        background: #13162a;
-        border: tall #ff5f57;
-        color: #ff5f57;
-    }
-
-    #btn-deny:hover {
-        background: #2a1a1a;
+        min-width: 16;
     }
 
     ActivityItem { margin-bottom: 1; color: #ffffff; }
 
-    Label { color: #7b8cde; }
+    Label { color: #00ff9f; }
     
-    Tree { background: #0b0d13; color: #9aa0b8; }
-    Tree:focus { background: #0b0d13; }
+    Tree { background: #0f0a14; color: #00d9ff; }
+    Tree:focus { background: #0f0a14; }
 
     #slash-suggestions {
         dock: bottom;
@@ -408,8 +387,8 @@ class OblivionApp(App):
         max-height: 14;
         width: 65;
         margin: 0;
-        background: #0b0d13;
-        border: round #7b8cde;
+        background: #0f0a14;
+        border: round #00ff9f;
         display: none;
     }
 
@@ -418,12 +397,12 @@ class OblivionApp(App):
     }
 
     #slash-suggestions > .option-list--option-highlighted {
-        background: #febc2e;
+        background: #ff006e;
         color: #ffffff;
     }
 
     #slash-suggestions > .option-list--option {
-        color: #9aa0b8;
+        color: #00d9ff;
     }
     """
 
@@ -469,16 +448,16 @@ class OblivionApp(App):
 
         with Horizontal(id="main-container"):
             with Vertical(id="chat-panel"):
-                yield Label("[bold #febc2e]◢ CHAT ◣[/bold #febc2e]")
+                yield Label("[bold #ff006e]◢ NEURAL LINK ◣[/bold #ff006e]")
                 yield RichLog(id="chat-log", wrap=True, highlight=True, markup=True)
 
             with Vertical(id="side-panel"):
                 with Vertical(id="activity-panel"):
-                    yield Label("[bold #7b8cde]◢ AGENT LOG ◣[/bold #7b8cde]")
+                    yield Label("[bold #00ff9f]◢ PROCESS MONITOR ◣[/bold #00ff9f]")
                     yield VerticalScroll(id="activity-scroll")
 
                 with Vertical(id="workspace-panel"):
-                    yield Label("[bold #3e4560]◢ FILES ◣[/bold #3e4560]")
+                    yield Label("[bold #b537f2]◢ FILESYSTEM ◣[/bold #b537f2]")
                     yield Tree("◆ root/", id="workspace-tree")
 
         yield Input(placeholder="◢ Enter command, /help, or Ctrl+T to talk…", id="input-box")
@@ -498,22 +477,22 @@ class OblivionApp(App):
         # Pulse when busy
         if self.agent_busy:
             self._pulse_idx = (self._pulse_idx + 1) % len(PULSE_FRAMES)
-            pulse = f"[#febc2e]{PULSE_FRAMES[self._pulse_idx]}[/#febc2e]"
+            pulse = f"[#ff006e]{PULSE_FRAMES[self._pulse_idx]}[/#ff006e]"
             status_color = "#ffea00"
         else:
-            pulse = "[#7b8cde]●[/#7b8cde]"
-            status_color = "#7b8cde"
+            pulse = "[#00ff9f]●[/#00ff9f]"
+            status_color = "#00ff9f"
 
         # Paid model warning
         paid_warn = ""
         if "$" in model_info.get("cost", ""):
-            paid_warn = " [bold #febc2e]💰[/bold #febc2e]"
+            paid_warn = " [bold #ff006e]💰[/bold #ff006e]"
 
         return (
             f"{pulse} [bold {status_color}]{self.current_status}[/bold {status_color}]"
-            f"  [dim]│[/dim]  [#9aa0b8]◆ {workspace}[/#9aa0b8]"
+            f"  [dim]│[/dim]  [#00d9ff]◆ {workspace}[/#00d9ff]"
             f"  [dim]│[/dim]  [bold {model_color}]⬢ {model_label}[/bold {model_color}]{paid_warn}"
-            f"  [dim]│[/dim]  [#febc2e]session {self.session_id or '-'}[/#febc2e]"
+            f"  [dim]│[/dim]  [#ff006e]session {self.session_id or '-'}[/#ff006e]"
             f"  [dim]│[/dim]  msg {msgs}  step {self.iteration_count}"
             f"  [dim]│[/dim]  [dim]^Q quit ^H help[/dim]"
             f"{self._render_waveform()}"
@@ -523,7 +502,7 @@ class OblivionApp(App):
         """Pattern G: cyan waveform for M.E.E.R.A. — flat when idle, pulsing when speaking."""
         width = 16
         if not self.meera_speaking:
-            return "  [#9aa0b8]M.E.E.R.A. " + ("▁" * width) + "[/#9aa0b8]"
+            return "  [#00d9ff]M.E.E.R.A. " + ("▁" * width) + "[/#00d9ff]"
         bars = "▁▂▃▄▅▆▇█▇▆▅▄▃▂"
         phase = self.meera_wave_phase
         out = []
@@ -532,7 +511,7 @@ class OblivionApp(App):
             v = ((i * 3 + phase) % len(bars))
             w = ((i + phase * 2) % len(bars))
             out.append(bars[(v + w) % len(bars)])
-        return "  [bold #9aa0b8]M.E.E.R.A. " + "".join(out) + "[/bold #9aa0b8]"
+        return "  [bold #00d9ff]M.E.E.R.A. " + "".join(out) + "[/bold #00d9ff]"
 
     def _meera_done(self):
         """Called from speak thread to stop the waveform animation."""
@@ -583,12 +562,12 @@ class OblivionApp(App):
         """Show banner with typewriter effect."""
         # Boot sequence messages
         boot_msgs = [
-            ("[dim #7b8cde]▸ Initializing neural pathways...[/dim #7b8cde]", 0.05),
-            ("[dim #7b8cde]▸ Loading qwen3-coder weights...[/dim #7b8cde]", 0.05),
-            ("[dim #7b8cde]▸ Mounting vector database...[/dim #7b8cde]", 0.05),
-            ("[dim #7b8cde]▸ Activating tool registry...[/dim #7b8cde]", 0.05),
-            ("[dim #7b8cde]▸ Establishing neural link...[/dim #7b8cde]", 0.1),
-            ("[bold #7b8cde]▸ ALL SYSTEMS ONLINE[/bold #7b8cde]", 0.2),
+            ("[dim #00ff9f]▸ Initializing neural pathways...[/dim #00ff9f]", 0.05),
+            ("[dim #00ff9f]▸ Loading qwen3-coder weights...[/dim #00ff9f]", 0.05),
+            ("[dim #00ff9f]▸ Mounting vector database...[/dim #00ff9f]", 0.05),
+            ("[dim #00ff9f]▸ Activating tool registry...[/dim #00ff9f]", 0.05),
+            ("[dim #00ff9f]▸ Establishing neural link...[/dim #00ff9f]", 0.1),
+            ("[bold #00ff9f]▸ ALL SYSTEMS ONLINE[/bold #00ff9f]", 0.2),
             ("", 0.1),
         ]
 
@@ -599,11 +578,11 @@ class OblivionApp(App):
         # Banner - reveal line by line
         for line in BANNER.splitlines():
             if line.strip():
-                log.write(Align.center(Text(line, style="bold #7b8cde")))
+                log.write(Align.center(Text(line, style="bold #00ff9f")))
                 await asyncio.sleep(0.04)
 
         await asyncio.sleep(0.2)
-        log.write(Align.center(Text(TAGLINE, style="bold #febc2e")))
+        log.write(Align.center(Text(TAGLINE, style="bold #ff006e")))
         await asyncio.sleep(0.3)
         log.write("")
 
@@ -617,17 +596,17 @@ class OblivionApp(App):
                 pass
 
         log.write(Panel(
-            "[#7b8cde]◢ NEURAL INTERFACE ACTIVE[/#7b8cde]\n\n"
-            "[white]Model:[/white]      [#9aa0b8]" + os.getenv("DEFAULT_MODEL", "?").split("/")[-1] + "[/#9aa0b8]\n"
-            "[white]Workspace:[/white]  [#3e4560]" + os.getenv("WORKSPACE_DIR", ".") + "[/#3e4560]\n"
-            "[white]Session:[/white]    [#febc2e]#" + str(self.session_id) + "[/#febc2e]\n\n"
+            "[#00ff9f]◢ NEURAL INTERFACE ACTIVE[/#00ff9f]\n\n"
+            "[white]Model:[/white]      [#00d9ff]" + os.getenv("DEFAULT_MODEL", "?").split("/")[-1] + "[/#00d9ff]\n"
+            "[white]Workspace:[/white]  [#b537f2]" + os.getenv("WORKSPACE_DIR", ".") + "[/#b537f2]\n"
+            "[white]Session:[/white]    [#ff006e]#" + str(self.session_id) + "[/#ff006e]\n\n"
             "[dim]┌─ Quick Start ─────────────────────────────┐[/dim]\n"
-            "[dim]│[/dim]  [#7b8cde]/[/#7b8cde]              show slash commands\n"
+            "[dim]│[/dim]  [#00ff9f]/[/#00ff9f]              show slash commands\n"
             "[dim]│[/dim]  [italic]'list files in agent/'[/italic]      natural lang\n"
             "[dim]│[/dim]  [italic]'where is the ReAct loop?'[/italic]  semantic search\n"
             "[dim]└───────────────────────────────────────────┘[/dim]",
-            title="[bold #7b8cde]◢ SYSTEM ONLINE ◣[/bold #7b8cde]",
-            border_style="#7b8cde",
+            title="[bold #00ff9f]◢ SYSTEM ONLINE ◣[/bold #00ff9f]",
+            border_style="#00ff9f",
         ))
 
     def _animate_tick(self) -> None:
@@ -676,7 +655,7 @@ class OblivionApp(App):
                 continue
 
             icons = {"modified": "✎", "created": "✚", "deleted": "✗", "error": "⚠"}
-            colors = {"modified": "#9aa0b8", "created": "#7b8cde", "deleted": "#febc2e", "error": "#febc2e"}
+            colors = {"modified": "#00d9ff", "created": "#00ff9f", "deleted": "#ff006e", "error": "#ff006e"}
             icon = icons.get(etype, "·")
             color = colors.get(etype, "white")
 
@@ -719,7 +698,7 @@ class OblivionApp(App):
                 if log is not None:
                     self.call_from_thread(
                         log.write,
-                        "[#9aa0b8]↻ Background reindex started…[/#9aa0b8]",
+                        "[#00d9ff]↻ Background reindex started…[/#00d9ff]",
                     )
                 from agent.rag import index_codebase
                 from pathlib import Path as _P
@@ -727,7 +706,7 @@ class OblivionApp(App):
                 if log is not None:
                     self.call_from_thread(
                         log.write,
-                        f"[#7b8cde]↻ Reindex done:[/#7b8cde] "
+                        f"[#00ff9f]↻ Reindex done:[/#00ff9f] "
                         f"{stats.get('files_indexed',0)} files, "
                         f"+{stats.get('chunks_added',0)} chunks, "
                         f"+{stats.get('symbols_added',0)} symbols",
@@ -736,7 +715,7 @@ class OblivionApp(App):
                 if log is not None:
                     self.call_from_thread(
                         log.write,
-                        f"[#febc2e]Reindex failed: {e}[/#febc2e]",
+                        f"[#ff006e]Reindex failed: {e}[/#ff006e]",
                     )
             finally:
                 self._oblivion_bg_reindex = False
@@ -756,8 +735,8 @@ class OblivionApp(App):
             fallback = Path.home() / "ai-agent"
             try:
                 log = self.query_one("#chat-log", RichLog)
-                log.write(f"[#febc2e]⚠ Saved workspace missing: {workspace}[/#febc2e]")
-                log.write(f"[#7b8cde]→ Falling back to: {fallback}[/#7b8cde]")
+                log.write(f"[#ff006e]⚠ Saved workspace missing: {workspace}[/#ff006e]")
+                log.write(f"[#00ff9f]→ Falling back to: {fallback}[/#00ff9f]")
             except Exception:
                 pass
             workspace = fallback.resolve()
@@ -795,7 +774,7 @@ class OblivionApp(App):
         arg = parts[1] if len(parts) > 1 else ""
 
         if command == "/continue":
-            log.write("[#9aa0b8]Resuming task with fresh iteration budget...[/#9aa0b8]")
+            log.write("[#00d9ff]Resuming task with fresh iteration budget...[/#00d9ff]")
             self.run_worker(
                 self._run_agent("Continue the previous task from where you left off. Use the conversation history to know what files are already done and what still needs to be built."),
                 exclusive=True,
@@ -804,35 +783,35 @@ class OblivionApp(App):
 
         if command == "/help":
             log.write(Panel(
-                "[bold #7b8cde]◢ SLASH COMMANDS ◣[/bold #7b8cde]\n\n"
-                "[#9aa0b8]/help[/#9aa0b8]                  Show this help\n"
-                "[#9aa0b8]/clear[/#9aa0b8]                 Clear chat history\n"
-                "[#9aa0b8]/index[/#9aa0b8]                 Re-index current workspace\n"
-                "[#9aa0b8]/index status[/#9aa0b8]          Show chunk count\n"
-                "[#9aa0b8]/workspace[/#9aa0b8]             Show current workspace\n"
-                "[#9aa0b8]/workspace <path>[/#9aa0b8]      Switch workspace\n"
-                "[#9aa0b8]/newproject <name>[/#9aa0b8]     Create ~/Projects/<name>/ and switch into it\n"
-                "[#9aa0b8]/openproject <name>[/#9aa0b8]    Open an existing project in ~/Projects/\n"
-                "[#9aa0b8]/projects[/#9aa0b8]              List all projects in ~/Projects/\n"
-                "[#9aa0b8]/newproject <name>[/#9aa0b8]     Create ~/Projects/<name>/ and switch into it\n"
-                "[#9aa0b8]/openproject <name>[/#9aa0b8]    Open an existing project in ~/Projects/\n"
-                "[#9aa0b8]/projects[/#9aa0b8]              List all projects in ~/Projects/\n"
-                "[#9aa0b8]/model[/#9aa0b8]                 Show current model\n"
-                "[#9aa0b8]/model <name>[/#9aa0b8]          Switch LLM model\n"
-                "[#9aa0b8]/save <name>[/#9aa0b8]           Save session\n"
-                "[#9aa0b8]/load <name>[/#9aa0b8]           Resume saved session\n"
-                "[#9aa0b8]/sessions[/#9aa0b8]              List saved sessions\n"
-                "[#9aa0b8]/stats[/#9aa0b8]                 Show conversation stats\n"
-                "[#9aa0b8]/quit[/#9aa0b8]                  Exit Oblivion",
-                title="[bold #febc2e]HELP[/bold #febc2e]",
-                border_style="#febc2e",
+                "[bold #00ff9f]◢ SLASH COMMANDS ◣[/bold #00ff9f]\n\n"
+                "[#00d9ff]/help[/#00d9ff]                  Show this help\n"
+                "[#00d9ff]/clear[/#00d9ff]                 Clear chat history\n"
+                "[#00d9ff]/index[/#00d9ff]                 Re-index current workspace\n"
+                "[#00d9ff]/index status[/#00d9ff]          Show chunk count\n"
+                "[#00d9ff]/workspace[/#00d9ff]             Show current workspace\n"
+                "[#00d9ff]/workspace <path>[/#00d9ff]      Switch workspace\n"
+                "[#00d9ff]/newproject <name>[/#00d9ff]     Create ~/Projects/<name>/ and switch into it\n"
+                "[#00d9ff]/openproject <name>[/#00d9ff]    Open an existing project in ~/Projects/\n"
+                "[#00d9ff]/projects[/#00d9ff]              List all projects in ~/Projects/\n"
+                "[#00d9ff]/newproject <name>[/#00d9ff]     Create ~/Projects/<name>/ and switch into it\n"
+                "[#00d9ff]/openproject <name>[/#00d9ff]    Open an existing project in ~/Projects/\n"
+                "[#00d9ff]/projects[/#00d9ff]              List all projects in ~/Projects/\n"
+                "[#00d9ff]/model[/#00d9ff]                 Show current model\n"
+                "[#00d9ff]/model <name>[/#00d9ff]          Switch LLM model\n"
+                "[#00d9ff]/save <name>[/#00d9ff]           Save session\n"
+                "[#00d9ff]/load <name>[/#00d9ff]           Resume saved session\n"
+                "[#00d9ff]/sessions[/#00d9ff]              List saved sessions\n"
+                "[#00d9ff]/stats[/#00d9ff]                 Show conversation stats\n"
+                "[#00d9ff]/quit[/#00d9ff]                  Exit Oblivion",
+                title="[bold #ff006e]HELP[/bold #ff006e]",
+                border_style="#ff006e",
             ))
             return True
 
         if command == "/clear":
             log.clear()
             self._clear_activity()
-            log.write("[#7b8cde]◢ Neural link cleared. Ready for new directives.[/#7b8cde]")
+            log.write("[#00ff9f]◢ Neural link cleared. Ready for new directives.[/#00ff9f]")
             return True
 
         if command == "/index":
@@ -840,13 +819,13 @@ class OblivionApp(App):
                 from agent.rag import index_stats
                 stats = index_stats()
                 log.write(Panel(
-                    f"[#7b8cde]Total chunks indexed:[/#7b8cde] {stats['total_chunks']}\n"
-                    f"[#7b8cde]Storage path:[/#7b8cde] [dim]{stats['index_path']}[/dim]",
-                    title="[#3e4560]INDEX STATUS[/#3e4560]",
-                    border_style="#3e4560",
+                    f"[#00ff9f]Total chunks indexed:[/#00ff9f] {stats['total_chunks']}\n"
+                    f"[#00ff9f]Storage path:[/#00ff9f] [dim]{stats['index_path']}[/dim]",
+                    title="[#b537f2]INDEX STATUS[/#b537f2]",
+                    border_style="#b537f2",
                 ))
             elif arg == "force":
-                log.write("[#febc2e]◢ Force re-indexing entire workspace...[/#febc2e]")
+                log.write("[#ff006e]◢ Force re-indexing entire workspace...[/#ff006e]")
                 self.current_status = "INDEXING"
                 self.update_status()
                 from agent.rag import index_codebase
@@ -854,12 +833,12 @@ class OblivionApp(App):
                 self.current_status = "READY"
                 self.update_status()
                 log.write(Panel(
-                    f"[#7b8cde]✓ Full reindex:[/#7b8cde] {stats['files_indexed']} files, "
+                    f"[#00ff9f]✓ Full reindex:[/#00ff9f] {stats['files_indexed']} files, "
                     f"{stats['chunks_added']} chunks",
-                    border_style="#7b8cde",
+                    border_style="#00ff9f",
                 ))
             else:
-                log.write("[#9aa0b8]◢ Incremental indexing (only changed files)...[/#9aa0b8]")
+                log.write("[#00d9ff]◢ Incremental indexing (only changed files)...[/#00d9ff]")
                 self.current_status = "INDEXING"
                 self.update_status()
                 from agent.rag import index_codebase
@@ -867,21 +846,21 @@ class OblivionApp(App):
                 self.current_status = "READY"
                 self.update_status()
                 log.write(Panel(
-                    f"[#7b8cde]✓ {stats['files_indexed']} changed[/#7b8cde]  "
+                    f"[#00ff9f]✓ {stats['files_indexed']} changed[/#00ff9f]  "
                     f"[dim]{stats['files_unchanged']} unchanged[/dim]  "
-                    f"[#9aa0b8]+{stats['chunks_added']} chunks[/#9aa0b8]  "
-                    f"[#febc2e]-{stats['deleted']} removed[/#febc2e]",
-                    border_style="#7b8cde",
+                    f"[#00d9ff]+{stats['chunks_added']} chunks[/#00d9ff]  "
+                    f"[#ff006e]-{stats['deleted']} removed[/#ff006e]",
+                    border_style="#00ff9f",
                 ))
             return True
 
         if command == "/workspace":
             if not arg:
-                log.write(f"[#7b8cde]Current workspace:[/#7b8cde] {os.getenv('WORKSPACE_DIR', '.')}")
+                log.write(f"[#00ff9f]Current workspace:[/#00ff9f] {os.getenv('WORKSPACE_DIR', '.')}")
             else:
                 expanded = os.path.expanduser(arg)
                 if not os.path.isdir(expanded):
-                    log.write(f"[#febc2e]✗ Not a directory: {expanded}[/#febc2e]")
+                    log.write(f"[#ff006e]✗ Not a directory: {expanded}[/#ff006e]")
                     return True
                 os.environ["WORKSPACE_DIR"] = expanded
                 # Persist to .env
@@ -891,8 +870,8 @@ class OblivionApp(App):
                     new_lines = [l for l in lines if not l.startswith("WORKSPACE_DIR=")]
                     new_lines.append(f"WORKSPACE_DIR={expanded}")
                     env_path.write_text("\n".join(new_lines) + "\n")
-                log.write(f"[#7b8cde]✓ Workspace set to:[/#7b8cde] {expanded}")
-                log.write("[#febc2e]◢ Run /index to index the new workspace[/#febc2e]")
+                log.write(f"[#00ff9f]✓ Workspace set to:[/#00ff9f] {expanded}")
+                log.write("[#ff006e]◢ Run /index to index the new workspace[/#ff006e]")
                 self._populate_tree()
                 self.update_status()
                 # Restart watcher pointed at new workspace
@@ -906,7 +885,7 @@ class OblivionApp(App):
                         callback=self._on_file_event,
                     )
                     self.watcher.start()
-                    log.write(f"[#7b8cde]◢ Watching {expanded} for changes[/#7b8cde]")
+                    log.write(f"[#00ff9f]◢ Watching {expanded} for changes[/#00ff9f]")
                 # Polish: also trigger background reindex like /openproject does
                 try:
                     self._trigger_bg_reindex(Path(expanded).resolve())
@@ -916,7 +895,7 @@ class OblivionApp(App):
 
         if command == "/newproject":
             if not arg:
-                log.write("[#febc2e]✗ Usage: /newproject <name>  or  /newproject <path>[/#febc2e]")
+                log.write("[#ff006e]✗ Usage: /newproject <name>  or  /newproject <path>[/#ff006e]")
                 log.write("[dim]Examples:[/dim]")
                 log.write("[dim]  /newproject myapp             → ~/Projects/myapp[/dim]")
                 log.write("[dim]  /newproject ~/key1            → ~/key1[/dim]")
@@ -945,7 +924,7 @@ class OblivionApp(App):
                 projects_root.mkdir(parents=True, exist_ok=True)
                 name = raw.replace(" ", "-")
                 if name.startswith(".") or "\\" in name:
-                    log.write(f"[#febc2e]✗ Invalid project name: {arg}[/#febc2e]")
+                    log.write(f"[#ff006e]✗ Invalid project name: {arg}[/#ff006e]")
                     log.write("[dim]Use a simple name like 'my-app', or provide a full path.[/dim]")
                     return True
                 new_project = (projects_root / name).resolve()
@@ -954,7 +933,7 @@ class OblivionApp(App):
             # Safety: refuse if it lands INSIDE the agent source dir
             try:
                 new_project.relative_to(self_dir)
-                log.write("[#febc2e]✗ Refused: that path is inside the agent source dir.[/#febc2e]")
+                log.write("[#ff006e]✗ Refused: that path is inside the agent source dir.[/#ff006e]")
                 log.write("[dim]Pick a location outside ~/ai-agent[/dim]")
                 return True
             except ValueError:
@@ -964,12 +943,12 @@ class OblivionApp(App):
             forbidden = ["/etc", "/usr", "/bin", "/sbin", "/sys", "/proc", "/boot", "/root"]
             for f in forbidden:
                 if str(new_project).startswith(f + "/") or str(new_project) == f:
-                    log.write(f"[#febc2e]✗ Refused: {f} is a protected system directory.[/#febc2e]")
+                    log.write(f"[#ff006e]✗ Refused: {f} is a protected system directory.[/#ff006e]")
                     return True
 
             if new_project.exists():
                 if not new_project.is_dir():
-                    log.write(f"[#febc2e]✗ Path exists but is not a directory: {new_project}[/#febc2e]")
+                    log.write(f"[#ff006e]✗ Path exists but is not a directory: {new_project}[/#ff006e]")
                     return True
                 log.write(f"[#ffea00]⚠ Already exists:[/#ffea00] {new_project}")
                 log.write("[dim]Switching workspace to it (no new folder created).[/dim]")
@@ -977,7 +956,7 @@ class OblivionApp(App):
                 try:
                     new_project.mkdir(parents=True, exist_ok=False)
                 except Exception as e:
-                    log.write(f"[#febc2e]✗ Could not create directory: {e}[/#febc2e]")
+                    log.write(f"[#ff006e]✗ Could not create directory: {e}[/#ff006e]")
                     return True
 
             # ── Switch workspace ──
@@ -995,11 +974,11 @@ class OblivionApp(App):
                 pass
 
             log.write(Panel(
-                f"[#7b8cde]✓ New workspace ready:[/#7b8cde] [bold]{display_name}[/bold]\n"
-                f"[#9aa0b8]Location:[/#9aa0b8] [dim]{new_project}[/dim]\n"
-                f"[#7b8cde]Workspace switched.[/#7b8cde] Oblivion will now build here.",
-                title="[#3e4560]◢ NEW WORKSPACE ◣[/#3e4560]",
-                border_style="#7b8cde",
+                f"[#00ff9f]✓ New workspace ready:[/#00ff9f] [bold]{display_name}[/bold]\n"
+                f"[#00d9ff]Location:[/#00d9ff] [dim]{new_project}[/dim]\n"
+                f"[#00ff9f]Workspace switched.[/#00ff9f] Oblivion will now build here.",
+                title="[#b537f2]◢ NEW WORKSPACE ◣[/#b537f2]",
+                border_style="#00ff9f",
             ))
             if self.auto_watch_enabled:
                 self._stop_watcher()
@@ -1012,7 +991,7 @@ class OblivionApp(App):
 
         if command == "/openproject":
             if not arg:
-                log.write("[#febc2e]✗ Usage: /openproject <name-or-path>[/#febc2e]")
+                log.write("[#ff006e]✗ Usage: /openproject <name-or-path>[/#ff006e]")
                 log.write("[dim]Examples:  /openproject myapp   |  /openproject /home/rohit/ai-agent  |  /openproject ~/code[/dim]")
                 return True
 
@@ -1033,7 +1012,7 @@ class OblivionApp(App):
                     target = p_alt
 
             if not target.exists() or not target.is_dir():
-                log.write(f"[#febc2e]✗ Not found: {target}[/#febc2e]")
+                log.write(f"[#ff006e]✗ Not found: {target}[/#ff006e]")
                 log.write("[dim]Use /projects to list ~/Projects/ entries, or pass an absolute path.[/dim]")
                 return True
             os.environ["WORKSPACE_DIR"] = str(target)
@@ -1049,10 +1028,10 @@ class OblivionApp(App):
             except Exception:
                 pass
             log.write(Panel(
-                f"[#7b8cde]✓ Opened project:[/#7b8cde] [bold]{arg}[/bold]\n"
-                f"[#9aa0b8]Location:[/#9aa0b8] [dim]{target}[/dim]",
-                title="[#3e4560]◢ PROJECT OPENED ◣[/#3e4560]",
-                border_style="#7b8cde",
+                f"[#00ff9f]✓ Opened project:[/#00ff9f] [bold]{arg}[/bold]\n"
+                f"[#00d9ff]Location:[/#00d9ff] [dim]{target}[/dim]",
+                title="[#b537f2]◢ PROJECT OPENED ◣[/#b537f2]",
+                border_style="#00ff9f",
             ))
             if self.auto_watch_enabled:
                 self._stop_watcher()
@@ -1075,12 +1054,12 @@ class OblivionApp(App):
             current_ws = Path(os.getenv("WORKSPACE_DIR", "")).resolve()
             lines = []
             for p in folders:
-                marker = "[#7b8cde]★[/#7b8cde]" if p.resolve() == current_ws else " "
+                marker = "[#00ff9f]★[/#00ff9f]" if p.resolve() == current_ws else " "
                 lines.append(f"{marker} [bold]{p.name}[/bold]  [dim]{p}[/dim]")
             log.write(Panel(
                 "\n".join(lines) + "\n\n[dim]★ = current workspace.  Use /openproject <name> to switch.[/dim]",
-                title=f"[#3e4560]◢ PROJECTS ({len(folders)}) ◣[/#3e4560]",
-                border_style="#3e4560",
+                title=f"[#b537f2]◢ PROJECTS ({len(folders)}) ◣[/#b537f2]",
+                border_style="#b537f2",
             ))
             return True
 
@@ -1089,33 +1068,33 @@ class OblivionApp(App):
             if arg.strip().lower() in ("reset", "reset-exhausted", "clear-exhausted"):
                 try:
                     self.agent.llm.reset_exhausted_models()
-                    log.write("[#7b8cde]Cleared exhausted-models cache. All fallback models will be retried.[/#7b8cde]")
+                    log.write("[#00ff9f]Cleared exhausted-models cache. All fallback models will be retried.[/#00ff9f]")
                 except Exception as e:
-                    log.write(f"[#febc2e]Could not reset: {e}[/#febc2e]")
+                    log.write(f"[#ff006e]Could not reset: {e}[/#ff006e]")
                 return True
 
             if not arg:
                 # Show table of all models
                 current = get_current_model_info()
-                lines = [f"[dim]Current:[/dim] [bold {current['color']}]{current['name']}[/bold {current['color']}]  [#9aa0b8]{current['id']}[/#9aa0b8]"]
+                lines = [f"[dim]Current:[/dim] [bold {current['color']}]{current['name']}[/bold {current['color']}]  [#00d9ff]{current['id']}[/#00d9ff]"]
                 lines.append("")
                 lines.append("[bold]Available models:[/bold]")
                 lines.append("")
                 for m in list_models_table():
-                    marker = "[#7b8cde]★[/#7b8cde]" if m["id"] == current["id"] else " "
+                    marker = "[#00ff9f]★[/#00ff9f]" if m["id"] == current["id"] else " "
                     ok, _ = check_api_key(m["name"])
-                    key_status = "" if ok else "  [#febc2e](no key)[/#febc2e]"
+                    key_status = "" if ok else "  [#ff006e](no key)[/#ff006e]"
                     lines.append(
                         f"{marker} [bold {m['color']}]{m['name']:<15}[/bold {m['color']}] "
-                        f"[#9aa0b8]{m['cost']:<20}[/#9aa0b8] "
+                        f"[#00d9ff]{m['cost']:<20}[/#00d9ff] "
                         f"[dim]{m['description']}[/dim]{key_status}"
                     )
                 lines.append("")
-                lines.append("[dim]Use:[/dim] [#7b8cde]/model <name>[/#7b8cde]  to switch")
+                lines.append("[dim]Use:[/dim] [#00ff9f]/model <name>[/#00ff9f]  to switch")
                 log.write(Panel(
                     "\n".join(lines),
-                    title="[bold #3e4560]◢ MODEL REGISTRY ◣[/bold #3e4560]",
-                    border_style="#3e4560",
+                    title="[bold #b537f2]◢ MODEL REGISTRY ◣[/bold #b537f2]",
+                    border_style="#b537f2",
                 ))
                 return True
 
@@ -1129,9 +1108,9 @@ class OblivionApp(App):
                 ok, msg = check_api_key(model_name)
                 if not ok:
                     log.write(Panel(
-                        f"[#febc2e]✗ Cannot switch to {model_name}[/#febc2e]\n\n{msg}",
-                        title="[#febc2e]API KEY MISSING[/#febc2e]",
-                        border_style="#febc2e",
+                        f"[#ff006e]✗ Cannot switch to {model_name}[/#ff006e]\n\n{msg}",
+                        title="[#ff006e]API KEY MISSING[/#ff006e]",
+                        border_style="#ff006e",
                     ))
                     return True
 
@@ -1148,11 +1127,11 @@ class OblivionApp(App):
                 # No need to reload agent - LLMClient.model is dynamic now
                 log.write(Panel(
                     f"[bold {info['color']}]✓ Switched to: {model_name}[/bold {info['color']}]\n\n"
-                    f"[#9aa0b8]Model:[/#9aa0b8]   {info['id']}\n"
-                    f"[#9aa0b8]Speed:[/#9aa0b8]   {info['speed']}\n"
-                    f"[#9aa0b8]Cost:[/#9aa0b8]    {info['cost']}\n"
+                    f"[#00d9ff]Model:[/#00d9ff]   {info['id']}\n"
+                    f"[#00d9ff]Speed:[/#00d9ff]   {info['speed']}\n"
+                    f"[#00d9ff]Cost:[/#00d9ff]    {info['cost']}\n"
                     f"[dim]{info['description']}[/dim]",
-                    title="[bold #7b8cde]MODEL SWITCHED[/bold #7b8cde]",
+                    title="[bold #00ff9f]MODEL SWITCHED[/bold #00ff9f]",
                     border_style=info['color'],
                 ))
                 self.update_status()
@@ -1167,20 +1146,20 @@ class OblivionApp(App):
                     new_lines = [l for l in lines if not l.startswith("DEFAULT_MODEL=")]
                     new_lines.append(f"DEFAULT_MODEL={model_name}")
                     env_path.write_text("\n".join(new_lines) + "\n")
-                log.write(f"[#7b8cde]✓ Switched to (raw):[/#7b8cde] {model_name}")
+                log.write(f"[#00ff9f]✓ Switched to (raw):[/#00ff9f] {model_name}")
                 self.update_status()
                 return True
 
             # Unknown short name
             available = ", ".join(MODELS.keys())
-            log.write(f"[#febc2e]✗ Unknown model: {model_name}[/#febc2e]")
+            log.write(f"[#ff006e]✗ Unknown model: {model_name}[/#ff006e]")
             log.write(f"[dim]Available: {available}[/dim]")
             log.write(f"[dim]Or use full id: /model groq/llama-3.3-70b-versatile[/dim]")
             return True
 
         if command == "/save":
             if not arg:
-                log.write("[#febc2e]Usage: /save <name>[/#febc2e]")
+                log.write("[#ff006e]Usage: /save <name>[/#ff006e]")
                 return True
             save_dir = Path.home() / ".ai-agent" / "sessions"
             save_dir.mkdir(parents=True, exist_ok=True)
@@ -1188,20 +1167,20 @@ class OblivionApp(App):
             (save_dir / f"{arg}.json").write_text(
                 json.dumps(self.agent.conversation, indent=2)
             )
-            log.write(f"[#7b8cde]✓ Saved session:[/#7b8cde] {arg}")
+            log.write(f"[#00ff9f]✓ Saved session:[/#00ff9f] {arg}")
             return True
 
         if command == "/load":
             if not arg:
-                log.write("[#febc2e]Usage: /load <name>[/#febc2e]")
+                log.write("[#ff006e]Usage: /load <name>[/#ff006e]")
                 return True
             save_path = Path.home() / ".ai-agent" / "sessions" / f"{arg}.json"
             if not save_path.exists():
-                log.write(f"[#febc2e]✗ Session not found: {arg}[/#febc2e]")
+                log.write(f"[#ff006e]✗ Session not found: {arg}[/#ff006e]")
                 return True
             import json
             self.agent.conversation = json.loads(save_path.read_text())
-            log.write(f"[#7b8cde]✓ Loaded session:[/#7b8cde] {arg} ({len(self.agent.conversation)} messages)")
+            log.write(f"[#00ff9f]✓ Loaded session:[/#00ff9f] {arg} ({len(self.agent.conversation)} messages)")
             return True
 
         if command == "/sessions":
@@ -1210,11 +1189,11 @@ class OblivionApp(App):
                 log.write("[dim]No saved sessions yet. Use /save <name>[/dim]")
             else:
                 sessions = sorted(save_dir.glob("*.json"))
-                lines = [f"[#9aa0b8]{s.stem}[/#9aa0b8]  [dim]({s.stat().st_size}B)[/dim]" for s in sessions]
+                lines = [f"[#00d9ff]{s.stem}[/#00d9ff]  [dim]({s.stat().st_size}B)[/dim]" for s in sessions]
                 log.write(Panel(
                     "\n".join(lines),
-                    title="[#3e4560]SAVED SESSIONS[/#3e4560]",
-                    border_style="#3e4560",
+                    title="[#b537f2]SAVED SESSIONS[/#b537f2]",
+                    border_style="#b537f2",
                 ))
             return True
 
@@ -1222,17 +1201,17 @@ class OblivionApp(App):
             current = get_current_model_info()
             tokens = self.agent.llm.get_token_stats()
             log.write(Panel(
-                f"[#7b8cde]Session ID:[/#7b8cde]    {self.session_id}\n"
-                f"[#7b8cde]Messages:[/#7b8cde]      {len(self.agent.conversation)}\n"
-                f"[#7b8cde]Model:[/#7b8cde]         [bold {current['color']}]{current['name']}[/bold {current['color']}] [dim]({current['id']})[/dim]\n"
-                f"[#7b8cde]Cost tier:[/#7b8cde]     {current['cost']}\n"
-                f"[#7b8cde]Workspace:[/#7b8cde]     {os.getenv('WORKSPACE_DIR', '?')}\n"
+                f"[#00ff9f]Session ID:[/#00ff9f]    {self.session_id}\n"
+                f"[#00ff9f]Messages:[/#00ff9f]      {len(self.agent.conversation)}\n"
+                f"[#00ff9f]Model:[/#00ff9f]         [bold {current['color']}]{current['name']}[/bold {current['color']}] [dim]({current['id']})[/dim]\n"
+                f"[#00ff9f]Cost tier:[/#00ff9f]     {current['cost']}\n"
+                f"[#00ff9f]Workspace:[/#00ff9f]     {os.getenv('WORKSPACE_DIR', '?')}\n"
                 f"\n"
-                f"[#7b8cde]Tokens in:[/#7b8cde]     {tokens['input']:,}\n"
-                f"[#7b8cde]Tokens out:[/#7b8cde]    {tokens['output']:,}\n"
-                f"[#7b8cde]Total tokens:[/#7b8cde]  {tokens['total']:,}",
-                title="[#3e4560]SESSION STATS[/#3e4560]",
-                border_style="#3e4560",
+                f"[#00ff9f]Tokens in:[/#00ff9f]     {tokens['input']:,}\n"
+                f"[#00ff9f]Tokens out:[/#00ff9f]    {tokens['output']:,}\n"
+                f"[#00ff9f]Total tokens:[/#00ff9f]  {tokens['total']:,}",
+                title="[#b537f2]SESSION STATS[/#b537f2]",
+                border_style="#b537f2",
             ))
             return True
 
@@ -1240,50 +1219,50 @@ class OblivionApp(App):
             if arg == "off":
                 self._stop_watcher()
                 self.auto_watch_enabled = False
-                log.write("[#febc2e]◢ Auto-watch disabled[/#febc2e]")
+                log.write("[#ff006e]◢ Auto-watch disabled[/#ff006e]")
             elif arg == "on" or arg == "":
                 self.auto_watch_enabled = True
                 self._start_watcher()
                 status = "watching" if self.watcher and self.watcher.is_running() else "stopped"
-                log.write(f"[#7b8cde]◢ Auto-watch enabled ({status})[/#7b8cde]")
+                log.write(f"[#00ff9f]◢ Auto-watch enabled ({status})[/#00ff9f]")
             elif arg == "status":
                 running = self.watcher.is_running() if self.watcher else False
                 log.write(Panel(
-                    f"[#7b8cde]Auto-watch:[/#7b8cde] {'ON' if self.auto_watch_enabled else 'OFF'}\n"
-                    f"[#7b8cde]Watcher running:[/#7b8cde] {'yes' if running else 'no'}\n"
-                    f"[#7b8cde]Workspace:[/#7b8cde] {os.getenv('WORKSPACE_DIR', '?')}",
-                    title="[#3e4560]WATCHER STATUS[/#3e4560]",
-                    border_style="#3e4560",
+                    f"[#00ff9f]Auto-watch:[/#00ff9f] {'ON' if self.auto_watch_enabled else 'OFF'}\n"
+                    f"[#00ff9f]Watcher running:[/#00ff9f] {'yes' if running else 'no'}\n"
+                    f"[#00ff9f]Workspace:[/#00ff9f] {os.getenv('WORKSPACE_DIR', '?')}",
+                    title="[#b537f2]WATCHER STATUS[/#b537f2]",
+                    border_style="#b537f2",
                 ))
             else:
-                log.write("[#febc2e]Usage: /watch [on|off|status][/#febc2e]")
+                log.write("[#ff006e]Usage: /watch [on|off|status][/#ff006e]")
             return True
 
         if command == "/meera":
             from agent import friday as fri
             if arg == "" or arg == "status":
                 log.write(Panel(
-                    f"[#7b8cde]Enabled:[/#7b8cde] {fri.is_enabled()}\n"
-                    f"[#7b8cde]Voice:[/#7b8cde]    {fri.get_voice()}\n"
-                    f"[#7b8cde]Name:[/#7b8cde]     {fri.get_name()}\n"
-                    f"[#7b8cde]Rate:[/#7b8cde]     {fri.get_rate()}\n"
-                    f"[#7b8cde]Volume:[/#7b8cde]   {fri.get_volume()}\n"
+                    f"[#00ff9f]Enabled:[/#00ff9f] {fri.is_enabled()}\n"
+                    f"[#00ff9f]Voice:[/#00ff9f]    {fri.get_voice()}\n"
+                    f"[#00ff9f]Name:[/#00ff9f]     {fri.get_name()}\n"
+                    f"[#00ff9f]Rate:[/#00ff9f]     {fri.get_rate()}\n"
+                    f"[#00ff9f]Volume:[/#00ff9f]   {fri.get_volume()}\n"
                     f"\n[dim]Personas:[/dim] {', '.join(fri.VOICES.keys())}",
-                    title="[#3e4560]M.E.E.R.A. STATUS[/#3e4560]",
-                    border_style="#3e4560",
+                    title="[#b537f2]M.E.E.R.A. STATUS[/#b537f2]",
+                    border_style="#b537f2",
                 ))
                 return True
             if arg in ("on", "enable"):
                 os.environ["FRIDAY_ENABLED"] = "true"
                 self._update_env("FRIDAY_ENABLED", "true")
-                log.write("[#7b8cde]M.E.E.R.A. enabled.[/#7b8cde]")
+                log.write("[#00ff9f]M.E.E.R.A. enabled.[/#00ff9f]")
                 fri.speak(f"Online, {fri.get_name()}.")
                 return True
             if arg in ("off", "disable"):
                 os.environ["FRIDAY_ENABLED"] = "false"
                 self._update_env("FRIDAY_ENABLED", "false")
                 fri.stop_speaking()
-                log.write("[#febc2e]M.E.E.R.A. silenced.[/#febc2e]")
+                log.write("[#ff006e]M.E.E.R.A. silenced.[/#ff006e]")
                 return True
             if arg == "stop":
                 fri.stop_speaking()
@@ -1292,7 +1271,7 @@ class OblivionApp(App):
             if arg == "test":
                 name = fri.get_name()
                 phrase = f"Good day, {name}. M.E.E.R.A. systems online. Voice {fri.get_voice()} responding."
-                log.write(f"[#9aa0b8]🔊 {phrase}[/#9aa0b8]")
+                log.write(f"[#00d9ff]🔊 {phrase}[/#00d9ff]")
                 fri.speak(phrase)
                 return True
             if arg.startswith("persona "):
@@ -1300,17 +1279,17 @@ class OblivionApp(App):
                 if persona in fri.VOICES:
                     os.environ["FRIDAY_VOICE"] = persona
                     self._update_env("FRIDAY_VOICE", persona)
-                    log.write(f"[#7b8cde]Voice persona: {persona} ({fri.VOICES[persona]})[/#7b8cde]")
+                    log.write(f"[#00ff9f]Voice persona: {persona} ({fri.VOICES[persona]})[/#00ff9f]")
                     fri.speak(f"Voice updated, {fri.get_name()}.")
                 else:
-                    log.write(f"[#febc2e]Unknown persona. Try: {', '.join(fri.VOICES.keys())}[/#febc2e]")
+                    log.write(f"[#ff006e]Unknown persona. Try: {', '.join(fri.VOICES.keys())}[/#ff006e]")
                 return True
             if arg.startswith("name "):
                 new_name = arg.replace("name ", "", 1).strip()
                 if new_name:
                     os.environ["FRIDAY_NAME"] = new_name
                     self._update_env("FRIDAY_NAME", new_name)
-                    log.write(f"[#7b8cde]Now calling you: {new_name}[/#7b8cde]")
+                    log.write(f"[#00ff9f]Now calling you: {new_name}[/#00ff9f]")
                     fri.speak(f"As you wish, {new_name}.")
                 return True
             if arg.startswith("rate "):
@@ -1321,10 +1300,10 @@ class OblivionApp(App):
                     rate = "+" + rate
                 os.environ["FRIDAY_RATE"] = rate
                 self._update_env("FRIDAY_RATE", rate)
-                log.write(f"[#7b8cde]Speech rate: {rate}[/#7b8cde]")
+                log.write(f"[#00ff9f]Speech rate: {rate}[/#00ff9f]")
                 fri.speak(f"Speech rate adjusted, {fri.get_name()}.")
                 return True
-            log.write("[#febc2e]Usage: /friday [on|off|stop|test|status|persona <name>|name <text>|rate <±N%>][/#febc2e]")
+            log.write("[#ff006e]Usage: /friday [on|off|stop|test|status|persona <name>|name <text>|rate <±N%>][/#ff006e]")
             return True
 
         if command == "/voice":
@@ -1340,8 +1319,8 @@ class OblivionApp(App):
                 ]
                 log.write(Panel(
                     "\n".join(lines) or "[dim]No input devices found.[/dim]",
-                    title="[#3e4560]AUDIO INPUT DEVICES[/#3e4560]",
-                    border_style="#3e4560",
+                    title="[#b537f2]AUDIO INPUT DEVICES[/#b537f2]",
+                    border_style="#b537f2",
                 ))
                 return True
             if arg.startswith("model "):
@@ -1355,21 +1334,21 @@ class OblivionApp(App):
                     new_lines.append(f"VOICE_MODEL={model_name}")
                     env_path.write_text("\n".join(new_lines) + "\n")
                 os.environ["VOICE_MODEL"] = model_name
-                log.write(f"[#7b8cde]✓ Whisper model set to: {model_name}[/#7b8cde]")
+                log.write(f"[#00ff9f]✓ Whisper model set to: {model_name}[/#00ff9f]")
                 log.write("[dim]Will load on next voice recording.[/dim]")
                 return True
             if arg == "status":
                 current_model = os.getenv("VOICE_MODEL", "small")
                 log.write(Panel(
-                    f"[#7b8cde]Whisper model:[/#7b8cde]  {current_model}\n"
-                    f"[#7b8cde]Status:[/#7b8cde]         {self.voice_status}\n"
-                    f"[#7b8cde]Recording:[/#7b8cde]      {'YES' if self.voice_recording else 'no'}\n"
-                    f"[#7b8cde]Hotkey:[/#7b8cde]         F2 (start / stop)",
-                    title="[#3e4560]VOICE STATUS[/#3e4560]",
-                    border_style="#3e4560",
+                    f"[#00ff9f]Whisper model:[/#00ff9f]  {current_model}\n"
+                    f"[#00ff9f]Status:[/#00ff9f]         {self.voice_status}\n"
+                    f"[#00ff9f]Recording:[/#00ff9f]      {'YES' if self.voice_recording else 'no'}\n"
+                    f"[#00ff9f]Hotkey:[/#00ff9f]         F2 (start / stop)",
+                    title="[#b537f2]VOICE STATUS[/#b537f2]",
+                    border_style="#b537f2",
                 ))
                 return True
-            log.write("[#febc2e]Usage: /voice [record|devices|status|model <name>][/#febc2e]")
+            log.write("[#ff006e]Usage: /voice [record|devices|status|model <name>][/#ff006e]")
             return True
 
         if command == "/memory":
@@ -1381,16 +1360,16 @@ class OblivionApp(App):
                         "[dim]No memory yet for this workspace.[/dim]\n\n"
                         "Memory grows as the agent learns project conventions.\n"
                         "It writes to MEMORY.md in your workspace root.",
-                        title="[#3e4560]MEMORY[/#3e4560]",
-                        border_style="#3e4560",
+                        title="[#b537f2]MEMORY[/#b537f2]",
+                        border_style="#b537f2",
                     ))
                 else:
                     # Show truncated for chat panel
                     preview = content if len(content) < 2000 else content[:2000] + "\n\n...(truncated)"
                     log.write(Panel(
                         preview,
-                        title="[#3e4560]WORKSPACE MEMORY[/#3e4560]",
-                        border_style="#3e4560",
+                        title="[#b537f2]WORKSPACE MEMORY[/#b537f2]",
+                        border_style="#b537f2",
                     ))
                 return True
             if arg == "stats":
@@ -1399,48 +1378,48 @@ class OblivionApp(App):
                     log.write("[dim]No MEMORY.md yet[/dim]")
                 else:
                     log.write(Panel(
-                        f"[#7b8cde]Notes:[/#7b8cde]      {stats['notes']}\n"
-                        f"[#7b8cde]Categories:[/#7b8cde] {stats['categories']}\n"
-                        f"[#7b8cde]Size:[/#7b8cde]       {stats['size_bytes']:,} bytes\n"
-                        f"[#7b8cde]Path:[/#7b8cde]       {stats['path']}",
-                        title="[#3e4560]MEMORY STATS[/#3e4560]",
-                        border_style="#3e4560",
+                        f"[#00ff9f]Notes:[/#00ff9f]      {stats['notes']}\n"
+                        f"[#00ff9f]Categories:[/#00ff9f] {stats['categories']}\n"
+                        f"[#00ff9f]Size:[/#00ff9f]       {stats['size_bytes']:,} bytes\n"
+                        f"[#00ff9f]Path:[/#00ff9f]       {stats['path']}",
+                        title="[#b537f2]MEMORY STATS[/#b537f2]",
+                        border_style="#b537f2",
                     ))
                 return True
             if arg == "edit":
                 p = get_memory_path()
                 if not p.exists():
                     p.write_text("# Project Memory\n\n_Notes remembered by Oblivion._\n\n", encoding="utf-8")
-                log.write(f"[#7b8cde]Memory file: {p}[/#7b8cde]")
+                log.write(f"[#00ff9f]Memory file: {p}[/#00ff9f]")
                 log.write("[dim]Open it in your editor to manually edit.[/dim]")
                 return True
             if arg == "clear":
                 p = get_memory_path()
                 if p.exists():
                     p.unlink()
-                log.write("[#febc2e]Memory cleared.[/#febc2e]")
+                log.write("[#ff006e]Memory cleared.[/#ff006e]")
                 return True
-            log.write("[#febc2e]Usage: /memory [show|stats|edit|clear][/#febc2e]")
+            log.write("[#ff006e]Usage: /memory [show|stats|edit|clear][/#ff006e]")
             return True
 
         if command == "/verify":
             from agent.brain import verify_code as vc
             if not arg:
-                log.write("[#febc2e]Usage: /verify <path>[/#febc2e]")
+                log.write("[#ff006e]Usage: /verify <path>[/#ff006e]")
                 return True
             result = vc(arg.strip())
             if result["ok"]:
                 log.write(Panel(
-                    f"[#7b8cde]{result['message']}[/#7b8cde]",
-                    title=f"[#7b8cde]VERIFIED: {arg}[/#7b8cde]",
-                    border_style="#7b8cde",
+                    f"[#00ff9f]{result['message']}[/#00ff9f]",
+                    title=f"[#00ff9f]VERIFIED: {arg}[/#00ff9f]",
+                    border_style="#00ff9f",
                 ))
             else:
                 log.write(Panel(
-                    f"[#febc2e]{result['message']}[/#febc2e]\n\n"
+                    f"[#ff006e]{result['message']}[/#ff006e]\n\n"
                     f"[dim]{result['details']}[/dim]",
-                    title=f"[#febc2e]FAILED: {arg}[/#febc2e]",
-                    border_style="#febc2e",
+                    title=f"[#ff006e]FAILED: {arg}[/#ff006e]",
+                    border_style="#ff006e",
                 ))
             return True
 
@@ -1456,7 +1435,7 @@ class OblivionApp(App):
             self.exit()
             return True
 
-        log.write(f"[#febc2e]✗ Unknown command: {command}[/#febc2e]  Type [#7b8cde]/help[/#7b8cde]")
+        log.write(f"[#ff006e]✗ Unknown command: {command}[/#ff006e]  Type [#00ff9f]/help[/#00ff9f]")
         return True
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -1475,7 +1454,7 @@ class OblivionApp(App):
                 suggestions.clear_options()
                 for cmd, desc in matches:
                     # Two-column formatting: command (cyan) + description (dim)
-                    label = f"[bold #7b8cde]{cmd:<18}[/bold #7b8cde] [dim]{desc}[/dim]"
+                    label = f"[bold #00ff9f]{cmd:<18}[/bold #00ff9f] [dim]{desc}[/dim]"
                     suggestions.add_option(Option(label, id=cmd))
                 suggestions.highlighted = 0
                 suggestions.add_class("visible")
@@ -1567,8 +1546,8 @@ class OblivionApp(App):
         log = self.query_one("#chat-log", RichLog)
         log.write(Panel(
             f"[#ffffff]{user_input}[/#ffffff]",
-            title="[bold #febc2e]◢ INPUT[/bold #febc2e]",
-            border_style="#febc2e",
+            title="[bold #ff006e]◢ INPUT[/bold #ff006e]",
+            border_style="#ff006e",
         ))
         log.write("[bold yellow]◌ Processing...[/bold yellow]")
         self.current_status = "▓ THINKING"
@@ -1628,7 +1607,7 @@ class OblivionApp(App):
 
         async def on_thought(thought: str):
             t = thought[:200] + "…" if len(thought) > 200 else thought
-            log.write(f"[#3e4560]◇[/#3e4560] [italic dim]{t}[/italic dim]")
+            log.write(f"[#b537f2]◇[/#b537f2] [italic dim]{t}[/italic dim]")
 
         async def on_tool_start(tool_name: str, args: dict):
             item = ActivityItem(tool_name, args, "running")
@@ -1650,9 +1629,9 @@ class OblivionApp(App):
                     try:
                         new_ws = Path(os.getenv("WORKSPACE_DIR", ".")).expanduser().resolve()
                         log.write(Panel(
-                            f"[#7b8cde]✓ Workspace is now:[/#7b8cde] [dim]{new_ws}[/dim]",
-                            title="[#3e4560]◢ WORKSPACE SWITCHED ◣[/#3e4560]",
-                            border_style="#7b8cde",
+                            f"[#00ff9f]✓ Workspace is now:[/#00ff9f] [dim]{new_ws}[/dim]",
+                            title="[#b537f2]◢ WORKSPACE SWITCHED ◣[/#b537f2]",
+                            border_style="#00ff9f",
                         ))
                         if self.auto_watch_enabled:
                             self._stop_watcher()
@@ -1662,7 +1641,7 @@ class OblivionApp(App):
                         self.update_status()
                         self._trigger_bg_reindex(new_ws)
                     except Exception as e:
-                        log.write(f"[#febc2e]⚠ UI refresh after workspace switch failed: {e}[/#febc2e]")
+                        log.write(f"[#ff006e]⚠ UI refresh after workspace switch failed: {e}[/#ff006e]")
 
         async def on_approve_tool(tool_name: str, args: dict) -> bool:
             # Reuse the existing TUI ApprovalModal flow via _handle_tool helpers
@@ -1673,10 +1652,10 @@ class OblivionApp(App):
                     from tools.filesystem import _safe_path, _PathError
                     p = _safe_path(path)
                 except _PathError as e:
-                    log.write(f"[#febc2e]✗ {e}[/#febc2e]")
+                    log.write(f"[#ff006e]✗ {e}[/#ff006e]")
                     return False
                 except Exception as e:
-                    log.write(f"[#febc2e]✗ resolve error: {e}[/#febc2e]")
+                    log.write(f"[#ff006e]✗ resolve error: {e}[/#ff006e]")
                     return False
                 if p.exists():
                     original = p.read_text(encoding="utf-8", errors="ignore")
@@ -1693,17 +1672,17 @@ class OblivionApp(App):
                     from tools.filesystem import _safe_path, _PathError
                     p = _safe_path(path)
                 except _PathError as e:
-                    log.write(f"[#febc2e]✗ {e}[/#febc2e]")
+                    log.write(f"[#ff006e]✗ {e}[/#ff006e]")
                     return False
                 except Exception as e:
-                    log.write(f"[#febc2e]✗ resolve error: {e}[/#febc2e]")
+                    log.write(f"[#ff006e]✗ resolve error: {e}[/#ff006e]")
                     return False
                 if not p.exists():
-                    log.write(f"[#febc2e]✗ File not found: {path}[/#febc2e]")
+                    log.write(f"[#ff006e]✗ File not found: {path}[/#ff006e]")
                     return False
                 original = p.read_text(encoding="utf-8", errors="ignore")
                 if old not in original:
-                    log.write(f"[#febc2e]✗ old_text not found in {path}[/#febc2e]")
+                    log.write(f"[#ff006e]✗ old_text not found in {path}[/#ff006e]")
                     return False
                 updated = original.replace(old, new, 1)
                 diff = make_diff(original, updated, path)
@@ -1724,8 +1703,8 @@ class OblivionApp(App):
         async def on_final(content: str):
             log.write(Panel(
                 RichMarkdown(content),
-                title="[bold #7b8cde]◢ OBLIVION ◣[/bold #7b8cde]",
-                border_style="#7b8cde",
+                title="[bold #00ff9f]◢ OBLIVION ◣[/bold #00ff9f]",
+                border_style="#00ff9f",
             ))
             save_message(self.session_id, "assistant", content)
             if friday.is_enabled():
@@ -1745,10 +1724,10 @@ class OblivionApp(App):
                 threading.Thread(target=speak_summary, daemon=True).start()
 
         async def on_error(msg: str):
-            log.write(f"[#febc2e]✗ LLM error: {msg}[/#febc2e]")
+            log.write(f"[#ff006e]✗ LLM error: {msg}[/#ff006e]")
 
         async def on_parse_failure(raw: str):
-            log.write("[#febc2e]✗ Could not parse output, retrying…[/#febc2e]")
+            log.write("[#ff006e]✗ Could not parse output, retrying…[/#ff006e]")
 
         # ── Run the unified runtime ──────────────────────────────────────────
         cbs = RuntimeCallbacks(
@@ -1767,7 +1746,7 @@ class OblivionApp(App):
         try:
             await runtime.run_async(user_message, cbs)
         finally:
-            # Repopulate FILES panel after any write/edit/create
+            # Repopulate FILESYSTEM panel after any write/edit/create
             try:
                 self._populate_tree()
             except Exception:
@@ -1848,7 +1827,7 @@ class OblivionApp(App):
         self._clear_activity()
         log = self.query_one("#chat-log", RichLog)
         log.clear()
-        log.write("[#7b8cde]◢ Neural link reset.[/#7b8cde]")
+        log.write("[#00ff9f]◢ Neural link reset.[/#00ff9f]")
         self.update_status()
 
     def action_new_session(self) -> None:
@@ -1857,7 +1836,7 @@ class OblivionApp(App):
         self._clear_activity()
         log = self.query_one("#chat-log", RichLog)
         log.clear()
-        log.write(f"[#7b8cde]◢ New session: {self.session_id}[/#7b8cde]")
+        log.write(f"[#00ff9f]◢ New session: {self.session_id}[/#00ff9f]")
         self.update_status()
 
     def action_clear_chat(self) -> None:
@@ -1888,10 +1867,10 @@ class OblivionApp(App):
         self.update_status()
 
         log.write(Panel(
-            "[bold #febc2e]>>> RECORDING <<<[/bold #febc2e]\n"
-            "Speak now... press [bold #7b8cde]Ctrl+T[/bold #7b8cde] again to STOP",
-            title="[#febc2e]VOICE INPUT[/#febc2e]",
-            border_style="#febc2e",
+            "[bold #ff006e]>>> RECORDING <<<[/bold #ff006e]\n"
+            "Speak now... press [bold #00ff9f]Ctrl+T[/bold #00ff9f] again to STOP",
+            title="[#ff006e]VOICE INPUT[/#ff006e]",
+            border_style="#ff006e",
         ))
 
         def on_level(rms):
@@ -1938,7 +1917,7 @@ class OblivionApp(App):
         self.update_status()
 
         log = self.query_one("#chat-log", RichLog)
-        log.write("[#9aa0b8]>>> Transcribing audio... <<<[/#9aa0b8]")
+        log.write("[#00d9ff]>>> Transcribing audio... <<<[/#00d9ff]")
 
     def _on_voice_done(self, text: str):
         """Called when transcription completes. Fills input box."""
@@ -1976,8 +1955,8 @@ class OblivionApp(App):
         if text.startswith("__ERROR__:"):
             err = text[len("__ERROR__:"):]
             log.write(Panel(
-                f"[#febc2e]Voice error: {err}[/#febc2e]",
-                border_style="#febc2e",
+                f"[#ff006e]Voice error: {err}[/#ff006e]",
+                border_style="#ff006e",
             ))
             return
 
@@ -1991,11 +1970,11 @@ class OblivionApp(App):
         input_widget.focus()
 
         log.write(Panel(
-            f"[#7b8cde]\"{text.strip()}\"[/#7b8cde]\n\n"
-            "[dim]Review the text above and press [bold #7b8cde]Enter[/bold #7b8cde] to submit, "
+            f"[#00ff9f]\"{text.strip()}\"[/#00ff9f]\n\n"
+            "[dim]Review the text above and press [bold #00ff9f]Enter[/bold #00ff9f] to submit, "
             "or edit it first.[/dim]",
-            title="[#7b8cde]◢ TRANSCRIBED ◣[/#7b8cde]",
-            border_style="#7b8cde",
+            title="[#00ff9f]◢ TRANSCRIBED ◣[/#00ff9f]",
+            border_style="#00ff9f",
         ))
 
     def _clear_activity(self):

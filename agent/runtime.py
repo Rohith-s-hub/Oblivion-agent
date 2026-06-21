@@ -223,6 +223,11 @@ class AgentRuntime:
                 {"role": "system", "content": self.agent.system_prompt}
             ] + self.agent.conversation
 
+            # RATE LIMIT GUARD: small delay to stay under free-tier RPM limits
+            # Gemini free: 10 req/min. With 1.5s delay we max out at 40 req/min (safe).
+            import time as _time
+            _time.sleep(1.5)
+
             # Stream LLM output to UI via callback
             llm_output = await self._stream_llm(messages, cb)
             if llm_output is None:
