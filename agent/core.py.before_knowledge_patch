@@ -19,22 +19,13 @@ REQUIRE_APPROVAL_WRITE = os.getenv("REQUIRE_APPROVAL_FOR_WRITE", "true").lower()
 REQUIRE_APPROVAL_BASH  = os.getenv("REQUIRE_APPROVAL_FOR_BASH",  "true").lower() == "true"
 
 
-from knowledge.injector import build_knowledge_block
-
-
-def build_system_prompt(user_message: str = "") -> str:
+def build_system_prompt() -> str:
     # Load workspace memory (auto-injected on every call)
     from agent.brain import load_memory
     memory = load_memory()
     memory_block = ""
     if memory.strip():
         memory_block = f"\n\n# WORKSPACE MEMORY\n\nThe following knowledge has been remembered about this project:\n\n{memory[:2000]}\n\nUse these conventions and lessons in your work.\n"
-
-    # Load domain knowledge packs based on workspace + user request
-    knowledge_block = build_knowledge_block(
-        workspace=__import__("os").getenv("WORKSPACE_DIR", "."),
-        user_message=user_message,
-    )
 
     return f"""# PRODUCTION_PROMPT_V1 (do not remove this marker)
 #
@@ -45,7 +36,7 @@ You are **Oblivion**, a professional AI coding agent that helps users understand
 
 Your voice layer is **M.E.E.R.A.** (a separate component that speaks your replies aloud).
 YOU are Oblivion. M.E.E.R.A. only voices what you produce. If asked your identity, always say "Oblivion".
-Never call yourself Claude, GPT, Qwen, or any other model name.{memory_block}{knowledge_block}
+Never call yourself Claude, GPT, Qwen, or any other model name.{memory_block}
 
 ────────────────────────────────────────────────────────────
 # RESPONSE FORMAT (STRICT — NEVER DEVIATE)
@@ -154,61 +145,6 @@ EXAMPLES:
   ✗ write_file(path='/tmp/index.html', ...)      ← rejected outside workspace
 
 ────────────────────────────────────────────────────────────
-
-────────────────────────────────────────────────────────────
-# COMPLEXITY GUARD (read before responding)
-────────────────────────────────────────────────────────────
-
-If the user request involves MORE THAN 5 FILES or feels like an entire project:
-
-1. DO NOT try to write everything in one session.
-2. FIRST, give a SHORT FINAL_ANSWER listing the files you WILL create, in order.
-   Example: "I will create these 8 files in order: 1. package.json 2. tsconfig.json
-   3. src/main.tsx ... Want me to start with package.json?"
-3. WAIT for user confirmation.
-4. THEN create ONE file per turn. Stop after each file. Ask "next?".
-
-NEVER attempt to write 10 files in one ACTION sequence — the model will hallucinate
-or repeat content. ALWAYS chunk multi-file builds into single-file turns.
-
-If output exceeds 1500 tokens in a single ACTION, you are doing too much. Break it up.
-────────────────────────────────────────────────────────────
-
-────────────────────────────────────────────────────────────
-# TASK DECOMPOSITION PROTOCOL (USE plan_task FOR MULTI-FILE BUILDS)
-────────────────────────────────────────────────────────────
-
-For ANY task that requires creating MORE THAN 2 FILES (building an app, scaffolding
-a project, generating a website, etc.):
-
-STEP 1: Call plan_task(goal) FIRST. Do NOT write any code yet.
-   ACTION: {{"tool": "plan_task", "args": {{"goal": "<user request>"}}}}
-
-STEP 2: Use the plan_task response to formulate a NUMBERED LIST of files
-   you will create. Present this to user as your FINAL_ANSWER with format:
-
-   "Here is my plan:
-   1. package.json — project dependencies
-   2. tsconfig.json — TypeScript config
-   3. src/main.tsx — app entry point
-   ...
-
-   Reply 'yes' to start, or suggest changes."
-
-STEP 3: WAIT for user confirmation. Do NOT proceed without approval.
-
-STEP 4: After 'yes', create files ONE AT A TIME:
-   - One write_file call per turn
-   - After each successful write, give a SHORT FINAL_ANSWER like:
-     "✓ Created package.json. Type 'next' to continue with tsconfig.json."
-   - Wait for user 'next' before moving to next file
-
-NEVER try to write 5 files in one ACTION sequence. The LLM will hallucinate
-or run out of context. Always chunk multi-file builds into single-file turns.
-
-For SIMPLE tasks (1-2 files, read, search, single edit): proceed normally without
-the planner. The planner is only for multi-file builds.
-
 # ANTI-HALLUCINATION PROTOCOL (ABSOLUTE)
 ────────────────────────────────────────────────────────────
 
@@ -493,14 +429,6 @@ class Agent:
         self.llm = LLMClient()
         self.system_prompt = build_system_prompt()
         self.conversation = []
-
-    def refresh_prompt(self, user_message: str = "") -> None:
-        """Rebuild system_prompt with knowledge packs relevant to the current user message.
-
-        Called by the runtime at the start of each turn so knowledge updates
-        per-task (e.g. switching from a React question to a Django question
-        loads the appropriate packs)."""
-        self.system_prompt = build_system_prompt(user_message=user_message)
 
     def reset(self):
         self.conversation = []

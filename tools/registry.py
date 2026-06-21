@@ -1,4 +1,5 @@
 from tools.filesystem import read_file, write_file, list_dir, grep_files, file_exists, create_dir, new_workspace
+from tools.planner import plan_task
 from tools.bash import run_bash
 from tools.edit_file import edit_file, insert_after
 from tools.search_code import search_code
@@ -199,6 +200,18 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "plan_task",
+        "description": (
+            "BEFORE writing code for a multi-file task (build app, scaffold project, etc.), "
+            "call this to get a structured plan. The plan must be approved by user before execution. "
+            "Use this for ANY task that creates more than 2 files."
+        ),
+        "parameters": {
+            "goal": {"type": "string", "description": "User's high-level goal", "required": True},
+            "max_files": {"type": "integer", "description": "Max files in plan (default 10)", "required": False},
+        },
+    },
+    {
         "name": "finish",
         "description": "Signal task is complete.",
         "parameters": {
@@ -226,6 +239,7 @@ TOOL_FUNCTIONS = {
     "project_map":   project_map,
     "remember":     remember,
     "recall":       recall,
+    "plan_task":    plan_task,
 }
 
 

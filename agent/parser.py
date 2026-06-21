@@ -192,3 +192,27 @@ def parse_llm_output(text: str):
         return FinalAnswer(content=cleaned_text)
 
     return None
+
+
+def is_garbage_output(text: str) -> bool:
+    """Detect when LLM produces non-sense repetitive characters (context overflow symptom).
+    
+    Examples of garbage:
+      "====================" (repeated equals)
+      "////////////////////" (repeated slashes)
+      "                    " (just whitespace)
+    """
+    if not text or len(text) < 20:
+        return False
+    # Strip whitespace
+    stripped = text.strip()
+    if not stripped:
+        return True
+    # Check if >70% is a single repeating char
+    from collections import Counter
+    counts = Counter(stripped)
+    most_common_char, most_common_count = counts.most_common(1)[0]
+    ratio = most_common_count / len(stripped)
+    if ratio > 0.7 and most_common_char in "=-_/\\|#*~.":
+        return True
+    return False

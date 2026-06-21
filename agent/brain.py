@@ -299,3 +299,115 @@ def format_plan_speech(plan: Plan, name: str = "boss") -> str:
         parts.append(f"{len(plan.risks)} risk{'s' if len(plan.risks) != 1 else ''} to note.")
     parts.append("Plan's on screen for review. Approve when ready.")
     return " ".join(parts)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Context Manager — sliding window with summarization
+# ─────────────────────────────────────────────────────────────────────────────
+"""
+Stops conversation history from growing unbounded.
+
+Strategy:
+- Keep first user message (the original task)
+- Keep last N messages verbatim (recent context)
+- Summarize everything in between
+
+Called by AgentRuntime when message count > THRESHOLD.
+"""
+
+import os
+from typing import Callable, Optional
+
+# Tuning knobs (override via env)
+KEEP_LAST_N = int(os.getenv("CONTEXT_KEEP_LAST_N", "6"))
+SUMMARIZE_THRESHOLD = int(os.getenv("CONTEXT_SUMMARIZE_THRESHOLD", "10"))
+MAX_SUMMARY_TOKENS = int(os.getenv("CONTEXT_MAX_SUMMARY_TOKENS", "500"))
+
+
+def _approx_tokens(text: str) -> int:
+    """Rough token estimate (1 token ≈ 4 chars)."""
+    return len(text) // 4
+
+
+def needs_compression(messages: list) -> bool:
+    """Should we compress this conversation?"""
+    if len(messages) <= SUMMARIZE_THRESHOLD:
+        return False
+
+    # Also compress if total tokens > 8000
+    total = sum(_approx_tokens(m.get("content", "")) for m in messages)
+    return total > 8000
+
+
+def compress_conversation(
+    messages: list,
+    summarize_fn: Optional[Callable[[str], str]] = None,
+) -> list:
+    """Compress middle of conversation, keep head + tail intact.
+
+    Args:
+        messages: full conversation list
+        summarize_fn: callable that takes text and returns summary
+                      (usually an LLM call). If None, uses naive truncation.
+
+    Returns:
+        new list with: [first user msg, summary msg, ...last N messages]
+    """
+    if not needs_compression(messages):
+        return messages
+
+    if len(messages) < 2:
+        return messages
+
+    first = messages[0]  # original task
+    last_n = messages[-KEEP_LAST_N:]
+    middle = messages[1:-KEEP_LAST_N]
+
+    if not middle:
+        return messages
+
+    # Format middle for summarization
+    middle_text = "\n\n".join(
+        f"[{m.get('role', '?').upper()}]: {m.get('content', '')[:500]}"
+        for m in middle
+    )
+
+    if summarize_fn:
+        try:
+            summary = summarize_fn(middle_text)
+        except Exception:
+            # Fallback: naive truncation
+            summary = f"[Previous {len(middle)} messages truncated for brevity]"
+    else:
+        summary = f"[Previous {len(middle)} messages truncated for brevity]"
+
+    summary_msg = {
+        "role": "system",
+        "content": f"## CONVERSATION SUMMARY (so far)\n\n{summary}\n\n## RECENT MESSAGES:",
+    }
+
+    return [first, summary_msg] + last_n
+
+
+def summarize_via_llm(llm_client, text: str) -> str:
+    """Use a cheap LLM call to summarize conversation text."""
+    prompt = f"""Summarize the following conversation history in 3-5 bullet points.
+Focus on: what was attempted, what was decided, what files were created/modified, what errors occurred.
+
+CONVERSATION:
+{text[:6000]}
+
+SUMMARY (bullets only, no preamble):"""
+
+    try:
+        # Use a simple non-streaming chat call
+        if hasattr(llm_client, "chat"):
+            response = llm_client.chat(
+                messages=[{"role": "user", "content": prompt}],
+                stream=False,
+            )
+            return response.strip() if response else "[Summary unavailable]"
+    except Exception as e:
+        return f"[Summary failed: {type(e).__name__}]"
+
+    return "[Summary unavailable]"

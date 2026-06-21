@@ -64,12 +64,14 @@ class LLMClient:
     # All Groq models verified live as of fix date.
     # Ordering: code-specialist first, then large generalists, then fast small, then Ollama.
     FALLBACK_CHAIN = [
-        # Ollama Cloud qwen3-coder — NO rate limit, handles huge prompts
+        # PRIMARY: Gemini 2.5 Flash — 1M context, generous free tier
+        "gemini/gemini-2.5-flash",
+        # SECONDARY: Local Ollama (no rate limits, slow but reliable)
         "ollama/qwen3-coder:480b-cloud",
-        # Then Groq models (rate-limited but fast for small prompts)
+        # TERTIARY: Groq (fast but daily rate limit)
         "groq/llama-3.3-70b-versatile",
+        # QUATERNARY: Other Groq options
         "groq/openai/gpt-oss-120b",
-        "groq/qwen/qwen3-32b",
         "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     ]
     # Track which models are known-exhausted (persisted across restarts)

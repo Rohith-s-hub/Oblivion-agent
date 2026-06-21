@@ -26,8 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from agent.parser import parse_llm_output, ToolCall, FinalAnswer, is_garbage_output
-from agent.brain import compress_conversation, needs_compression, summarize_via_llm
+from agent.parser import parse_llm_output, ToolCall, FinalAnswer
 from tools.registry import dispatch
 
 
@@ -155,16 +154,10 @@ class AgentRuntime:
         cb = callbacks
 
         self.agent.conversation.append({"role": "user", "content": user_message})
-        # Refresh system prompt with knowledge packs relevant to this user request
-        try:
-            self.agent.refresh_prompt(user_message)
-        except Exception:
-            pass  # best-effort; never break the loop
         _log_event(self.session_id, "user_message", {"content": user_message})
 
         # LOOP DETECTION: track recent tool calls to catch the agent repeating itself
         recent_calls: list[str] = []
-        consecutive_reads = 0  # exploration loop guard
 
         for i in range(self.max_iterations):
             step = i + 1
@@ -195,29 +188,6 @@ class AgentRuntime:
                         )
                     except Exception:
                         pass
-
-            # ── CONTEXT COMPRESSION ───────────────────────────────────────
-            # If conversation grew too long, summarize the middle so we don't blow
-            # past the LLM context window.
-            if needs_compression(self.agent.conversation):
-                try:
-                    def _summary_fn(text):
-                        return summarize_via_llm(self.agent.llm, text)
-                    before_count = len(self.agent.conversation)
-                    self.agent.conversation = compress_conversation(
-                        self.agent.conversation,
-                        summarize_fn=_summary_fn,
-                    )
-                    after_count = len(self.agent.conversation)
-                    _log_event(self.session_id, "context_compressed", {
-                        "step": step,
-                        "before_msgs": before_count,
-                        "after_msgs": after_count,
-                    })
-                except Exception as e:
-                    _log_event(self.session_id, "compression_error", {
-                        "step": step, "error": str(e)[:200],
-                    })
 
             messages = [
                 {"role": "system", "content": self.agent.system_prompt}
@@ -302,30 +272,12 @@ class AgentRuntime:
 
                 # APPROVAL for sensitive tools
                 approved = True
-                needs_approval = tool_name in ("write_file", "edit_file", "run_bash")
-
-                # HARD SAFETY: rm -rf and other destructive bash always need approval
-                if tool_name == "run_bash":
-                    try:
-                        from tools.bash import is_dangerous_command
-                        if is_dangerous_command(tool_args.get("command", "")):
-                            needs_approval = True
-                            _log_event(self.session_id, "danger_detected", {
-                                "command": tool_args.get("command", "")[:200]
-                            })
-                    except ImportError:
-                        pass
-
-                if needs_approval:
+                if tool_name in ("write_file", "edit_file", "run_bash"):
                     if cb.on_approve_tool:
                         try:
                             approved = await cb.on_approve_tool(tool_name, tool_args)
                         except Exception:
                             approved = False
-                    else:
-                        # No approval callback registered = treat as denied for safety
-                        approved = False
-                        result = "BLOCKED: " + tool_name + " requires approval but no approval handler is registered."
 
                 # Execute
                 t0 = time.perf_counter()
@@ -357,36 +309,6 @@ class AgentRuntime:
                         "Continue: next THOUGHT + ACTION, or FINAL_ANSWER."
                     ),
                 })
-
-                # EXPLORATION LOOP GUARD: count read-only calls in a row
-                READ_ONLY_TOOLS = {
-                    "read_file", "list_dir", "grep_files", "file_exists",
-                    "search_code", "find_symbol", "list_symbols",
-                    "find_callers", "project_map", "recall",
-                }
-                if tool_name in READ_ONLY_TOOLS:
-                    consecutive_reads += 1
-                else:
-                    consecutive_reads = 0
-
-                if consecutive_reads >= 5:
-                    _log_event(self.session_id, "exploration_loop", {
-                        "step": step, "reads_count": consecutive_reads,
-                    })
-                    self.agent.conversation.append({
-                        "role": "user",
-                        "content": (
-                            "EXPLORATION LIMIT REACHED. You have made "
-                            + str(consecutive_reads)
-                            + " read/search calls in a row without writing any code. "
-                            "STOP exploring. You have enough context. Either:\n"
-                            "(a) Write the NEXT file with write_file, OR\n"
-                            "(b) Give FINAL_ANSWER with what you've learned so far.\n"
-                            "Do NOT call another read/search tool until you do one of the above."
-                        ),
-                    })
-                    consecutive_reads = 0
-
                 continue
 
             # ─── Parser failure

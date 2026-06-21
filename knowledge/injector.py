@@ -12,9 +12,9 @@ from typing import Set, Optional, List
 from knowledge.detector import detect_tech_stack, detect_from_request, describe_stack
 
 PACKS_DIR = Path(__file__).parent / "packs"
-MAX_PACKS = 2  # only top-2 to keep prompt under 12k tokens total
-MAX_PACK_CHARS = 8000  # ~2k tokens per pack
-MAX_TOTAL_CHARS = 16000  # ~4k tokens of knowledge MAX
+MAX_PACKS = 2  # only top-2 most relevant
+MAX_PACK_CHARS = 6000  # ~1500 tokens per pack
+MAX_TOTAL_CHARS = 12000  # ~3000 tokens of knowledge MAX
 
 PACK_PRIORITY = [
     "debugging",

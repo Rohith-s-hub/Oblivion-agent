@@ -106,16 +106,71 @@ class FileWatcher:
     def start(self):
         if self.observer is not None:
             return  # already running
+
+        # GUARD 1: workspace must exist
+        if not self.workspace.exists() or not self.workspace.is_dir():
+            if self.callback:
+                try:
+                    self.callback({
+                        "type": "error",
+                        "file": str(self.workspace),
+                        "error": f"Workspace does not exist: {self.workspace}",
+                    })
+                except Exception:
+                    pass
+            return
+
         handler = CodeChangeHandler(self.workspace, self.callback)
-        self.observer = Observer()
-        self.observer.schedule(handler, str(self.workspace), recursive=True)
-        self.observer.start()
+        try:
+            self.observer = Observer()
+            self.observer.schedule(handler, str(self.workspace), recursive=True)
+            self.observer.start()
+        except OSError as e:
+            # GUARD 2: inotify limit reached, permission denied, etc - dont crash
+            self.observer = None
+            err_msg = str(e)
+            if "inotify" in err_msg.lower() or "EMFILE" in err_msg or "limit reached" in err_msg.lower():
+                hint = (
+                    "inotify limit reached. Fix with:\n"
+                    "  echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf\n"
+                    "  echo fs.inotify.max_user_instances=512 | sudo tee -a /etc/sysctl.conf\n"
+                    "  sudo sysctl -p"
+                )
+            else:
+                hint = err_msg
+            if self.callback:
+                try:
+                    self.callback({
+                        "type": "error",
+                        "file": str(self.workspace),
+                        "error": f"Watcher failed to start: {hint}",
+                    })
+                except Exception:
+                    pass
+        except Exception as e:
+            # GUARD 3: anything else - never propagate
+            self.observer = None
+            if self.callback:
+                try:
+                    self.callback({
+                        "type": "error",
+                        "file": str(self.workspace),
+                        "error": f"Watcher error: {e}",
+                    })
+                except Exception:
+                    pass
 
     def stop(self):
         if self.observer is not None:
-            self.observer.stop()
-            self.observer.join(timeout=2)
+            try:
+                self.observer.stop()
+                self.observer.join(timeout=2)
+            except Exception:
+                pass
             self.observer = None
 
     def is_running(self) -> bool:
-        return self.observer is not None and self.observer.is_alive()
+        try:
+            return self.observer is not None and self.observer.is_alive()
+        except Exception:
+            return False

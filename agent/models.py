@@ -74,6 +74,22 @@ MODELS = {
         "color": "#4d6bfe",
         "api_key_env": "DEEPSEEK_API_KEY",
     },
+    "gemini-flash": {
+        "id": "gemini/gemini-2.5-flash",
+        "description": "Gemini 2.5 Flash — 1M context, blazing fast, generous free tier (recommended)",
+        "context_window": 1_048_576,
+        "supports_function_calling": True,
+        "api_key_env": "GEMINI_API_KEY",
+        "provider": "gemini",
+    },
+    "gemini-pro": {
+        "id": "gemini/gemini-2.5-pro",
+        "description": "Gemini 2.5 Pro — smarter than Flash, slower, lower free quota",
+        "context_window": 2_097_152,
+        "supports_function_calling": True,
+        "api_key_env": "GEMINI_API_KEY",
+        "provider": "gemini",
+    },
 }
 
 

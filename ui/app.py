@@ -773,6 +773,14 @@ class OblivionApp(App):
         command = parts[0].lower()
         arg = parts[1] if len(parts) > 1 else ""
 
+        if command == "/continue":
+            log.write("[#00d9ff]Resuming task with fresh iteration budget...[/#00d9ff]")
+            self.run_worker(
+                self._run_agent("Continue the previous task from where you left off. Use the conversation history to know what files are already done and what still needs to be built."),
+                exclusive=True,
+            )
+            return True
+
         if command == "/help":
             log.write(Panel(
                 "[bold #00ff9f]◢ SLASH COMMANDS ◣[/bold #00ff9f]\n\n"
@@ -1056,6 +1064,15 @@ class OblivionApp(App):
             return True
 
         if command == "/model":
+            # Quick subcommand: clear the exhausted-models cache
+            if arg.strip().lower() in ("reset", "reset-exhausted", "clear-exhausted"):
+                try:
+                    self.agent.llm.reset_exhausted_models()
+                    log.write("[#00ff9f]Cleared exhausted-models cache. All fallback models will be retried.[/#00ff9f]")
+                except Exception as e:
+                    log.write(f"[#ff006e]Could not reset: {e}[/#ff006e]")
+                return True
+
             if not arg:
                 # Show table of all models
                 current = get_current_model_info()
@@ -1545,7 +1562,20 @@ class OblivionApp(App):
         log = self.query_one("#chat-log", RichLog)
         activity_scroll = self.query_one("#activity-scroll", VerticalScroll)
 
-        runtime = AgentRuntime(self.agent, self.session_id, max_iterations=20)
+        # Read iteration budget from env (was hardcoded to 20, ignoring .env!)
+        max_iter = int(os.getenv("MAX_ITERATIONS", "30"))
+        # Detect complex tasks and auto-bump the budget
+        complex_keywords = [
+            "build", "create a", "make a", "scaffold", "set up", "setup",
+            "clone", "implement", "develop", "generate a", "full",
+            "complete", "entire", "whole", "website", "app", "application",
+            "project", "react", "vue", "django", "flask", "fastapi",
+            "netflix", "twitter", "spotify", "instagram", "dashboard",
+        ]
+        lower = user_message.lower()
+        if any(kw in lower for kw in complex_keywords):
+            max_iter = max(max_iter, 50)  # complex tasks get 50 iterations
+        runtime = AgentRuntime(self.agent, self.session_id, max_iterations=max_iter)
 
         # ── Callbacks ────────────────────────────────────────────────────────
         spinner_box = {"item": None, "tokens": 0}
