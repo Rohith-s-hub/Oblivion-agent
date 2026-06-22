@@ -591,11 +591,11 @@ class OblivionApp(App):
         for line in BANNER.splitlines():
             if line.strip():
                 log.write(Align.center(Text(line, style="bold #7b8cde")))
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.04)
 
-        await asyncio.sleep(0.005)
+        await asyncio.sleep(0.2)
         log.write(Align.center(Text(TAGLINE, style="bold #febc2e")))
-        await asyncio.sleep(0.005)
+        await asyncio.sleep(0.3)
         log.write("")
 
         # System info panel
@@ -793,23 +793,6 @@ class OblivionApp(App):
             )
             return True
 
-        if command == "/demo":
-            log = self.query_one("#chat-log", RichLog)
-            log.write("[bold #febc2e]YOU:[/bold #febc2e] Build me a React portfolio")
-            log.write("")
-            import time as _t
-            log.write("[bold #7b8cde]M.E.E.R.A:[/bold #7b8cde] Planning 7 files...")
-            log.write("  1. package.json")
-            log.write("  2. vite.config.ts")
-            log.write("  3. tsconfig.json")
-            log.write("  4. src/main.tsx")
-            log.write("  5. src/App.tsx")
-            log.write("  6. src/index.css")
-            log.write("  7. index.html")
-            log.write("")
-            log.write("[green]Done:[/green] 7 files created. Run npm install then npm run dev.")
-            return True
-
         if command == "/help":
             log.write(Panel(
                 "[bold #7b8cde]◢ SLASH COMMANDS ◣[/bold #7b8cde]\n\n"
@@ -979,7 +962,7 @@ class OblivionApp(App):
                 if not new_project.is_dir():
                     log.write(f"[#febc2e]✗ Path exists but is not a directory: {new_project}[/#febc2e]")
                     return True
-                log.write(f"[#febc2e]⚠ Already exists:[/#febc2e] {new_project}")
+                log.write(f"[#ffea00]⚠ Already exists:[/#ffea00] {new_project}")
                 log.write("[dim]Switching workspace to it (no new folder created).[/dim]")
             else:
                 try:
@@ -1574,7 +1557,7 @@ class OblivionApp(App):
 
         log = self.query_one("#chat-log", RichLog)
         log.write(f"[bold #febc2e]YOU:[/bold #febc2e] {user_input}")
-        log.write("[dim]processing...[/dim]")
+        log.write("[dim #7b8cde]⯿ M.E.E.R.A is thinking...[/dim #7b8cde]")
         self.current_status = "▓ THINKING"
         self.update_status()
 
@@ -1735,7 +1718,7 @@ class OblivionApp(App):
             if friday.is_enabled():
                 def speak_summary():
                     try:
-                        spoken = friday.summarize_for_speech(content, llm_client=self.agent.llm)
+                        spoken = content[:200].replace('*','').replace('#','').replace('`','').strip()
                         if spoken:
                             self.call_from_thread(self._show_friday_speech, spoken)
                             friday.speak(spoken, blocking=True)
