@@ -60,5 +60,3 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["agent", "tools", "db", "ui", "knowledge"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"knowledge/packs" = "knowledge/packs"
