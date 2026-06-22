@@ -106,15 +106,9 @@ class LLMClient:
     def chat_stream(
         self,
         messages: list,
-        on_token: Optional[Callable[[str], None]] = None,
+        on_token=None,
     ) -> str:
-        """DIRECT CALL — no fallback chain. Uses self.model only.
-
-        The fallback chain was causing silent model switches that burned
-        through free-tier quotas. This version calls ONLY the configured
-        default model. If it fails, it raises the error directly so the
-        user knows to wait or switch models manually with /model.
-        """
+        """LLM call with timeout. Non-streaming for slow network reliability."""
         import litellm
         model = self.model
         try:
@@ -123,21 +117,17 @@ class LLMClient:
                 messages=messages,
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
-                stream=True,
+                stream=False,
+                timeout=90,
             )
-            full = ""
-            for chunk in response:
-                delta = chunk.choices[0].delta.content or ""
-                if delta:
-                    full += delta
-                    if on_token:
-                        on_token(delta)
+            full = response.choices[0].message.content or ""
+            # Send all tokens at once to callback
+            if on_token and full:
+                on_token(full)
             self.total_output_tokens += len(full) // 4
             self.total_input_tokens += sum(len(m.get("content", "")) for m in messages) // 4
             return full
         except Exception as e:
-            err_msg = str(e)[:500]
-            console.print(f"[red]LLM error ({model}): {err_msg}[/red]")
             raise
 
 

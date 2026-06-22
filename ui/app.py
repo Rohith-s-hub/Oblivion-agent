@@ -591,11 +591,11 @@ class OblivionApp(App):
         for line in BANNER.splitlines():
             if line.strip():
                 log.write(Align.center(Text(line, style="bold #7b8cde")))
-                await asyncio.sleep(0.04)
+                await asyncio.sleep(0.01)
 
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.005)
         log.write(Align.center(Text(TAGLINE, style="bold #febc2e")))
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.005)
         log.write("")
 
         # System info panel
@@ -979,7 +979,7 @@ class OblivionApp(App):
                 if not new_project.is_dir():
                     log.write(f"[#febc2e]✗ Path exists but is not a directory: {new_project}[/#febc2e]")
                     return True
-                log.write(f"[#ffea00]⚠ Already exists:[/#ffea00] {new_project}")
+                log.write(f"[#febc2e]⚠ Already exists:[/#febc2e] {new_project}")
                 log.write("[dim]Switching workspace to it (no new folder created).[/dim]")
             else:
                 try:
@@ -1573,12 +1573,8 @@ class OblivionApp(App):
             return
 
         log = self.query_one("#chat-log", RichLog)
-        log.write(Panel(
-            f"[#ffffff]{user_input}[/#ffffff]",
-            title="[bold #febc2e]◢ INPUT[/bold #febc2e]",
-            border_style="#febc2e",
-        ))
-        log.write("[bold yellow]◌ Processing...[/bold yellow]")
+        log.write(f"[bold #febc2e]YOU:[/bold #febc2e] {user_input}")
+        log.write("[dim]processing...[/dim]")
         self.current_status = "▓ THINKING"
         self.update_status()
 
@@ -1732,7 +1728,7 @@ class OblivionApp(App):
         async def on_final(content: str):
             log.write(Panel(
                 RichMarkdown(content),
-                title="[bold #7b8cde]◢ OBLIVION ◣[/bold #7b8cde]",
+                title="[bold #7b8cde]M.E.E.R.A[/bold #7b8cde]",
                 border_style="#7b8cde",
             ))
             save_message(self.session_id, "assistant", content)
