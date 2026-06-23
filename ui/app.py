@@ -271,6 +271,60 @@ class ApprovalModal(ModalScreen[bool]):
 
 
 
+
+# ── Session Picker Modal (Ctrl+P) ────────────────────────────────────────────
+class SessionPicker(ModalScreen):
+    """Floating overlay listing past sessions. Click or Enter to load."""
+
+    BINDINGS = [
+        ("escape", "dismiss", "Close"),
+        ("ctrl+g", "dismiss", "Close"),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.sessions = []
+
+    def compose(self) -> ComposeResult:
+        from db.store import list_sessions_enriched
+        self.sessions = list_sessions_enriched(limit=100)
+
+        with Container(id="session-picker-container"):
+            yield Label(
+                f"[bold #7b8cde]◆ SESSION HISTORY[/bold #7b8cde]  "
+                f"[dim]({len(self.sessions)} total)[/dim]",
+                id="session-picker-header",
+            )
+
+            opts = OptionList(id="session-picker-list")
+            for s in self.sessions:
+                # Format: #ID  preview                   N msgs · date
+                date_short = (s["updated_at"] or "")[:16]
+                label = (
+                    f"[bold #febc2e]#{s['id']:>4}[/bold #febc2e]  "
+                    f"[white]{s['preview']:<60}[/white]  "
+                    f"[dim #9aa0b8]{s['messages']:>3} msg · {date_short}[/dim #9aa0b8]"
+                )
+                opts.add_option(Option(label, id=str(s["id"])))
+            yield opts
+
+            yield Static(
+                "[dim]↑↓ navigate · Enter to load · Esc to close[/dim]",
+                id="session-picker-hint",
+            )
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """User picked a session — return its ID to the caller."""
+        try:
+            session_id = int(event.option.id)
+            self.dismiss(session_id)
+        except (ValueError, TypeError):
+            self.dismiss(None)
+
+    def action_dismiss(self) -> None:
+        self.dismiss(None)
+
+
 # ── Activity Item ─────────────────────────────────────────────────────────────
 class ActivityItem(Static):
     _frame_idx = 0
@@ -314,6 +368,9 @@ class ActivityItem(Static):
 
 # ── Main App ──────────────────────────────────────────────────────────────────
 class OblivionApp(App):
+    # Disable Textual's built-in Ctrl+P command palette - we have our own /commands
+    ENABLE_COMMAND_PALETTE = False
+
     CSS = """
     Screen {
         background: #0d0f14;
@@ -459,6 +516,49 @@ class OblivionApp(App):
     #btn-deny:hover {
         background: #2a1a1a;
     }
+    SessionPicker {
+        align: center middle;
+        background: rgba(10, 12, 17, 0.85);
+    }
+
+    #session-picker-container {
+        width: 90;
+        max-width: 120;
+        height: 80%;
+        background: #0d0f14;
+        border: tall #7b8cde;
+        padding: 1 2;
+    }
+
+    #session-picker-header {
+        text-align: center;
+        width: 100%;
+        margin-bottom: 1;
+    }
+
+    #session-picker-list {
+        height: 1fr;
+        background: #0b0d13;
+        border: tall #2a2d46;
+    }
+
+    #session-picker-list > .option-list--option-highlighted {
+        background: #febc2e;
+        color: #0d0f14;
+    }
+
+    #session-picker-list > .option-list--option {
+        color: #c8cdd8;
+        padding: 0 1;
+    }
+
+    #session-picker-hint {
+        text-align: center;
+        width: 100%;
+        margin-top: 1;
+        color: #3e4560;
+    }
+
 
     ActivityItem { margin-bottom: 1; color: #ffffff; }
 
@@ -500,6 +600,7 @@ class OblivionApp(App):
         Binding("ctrl+l", "clear_chat", "Clear"),
         Binding("ctrl+h", "show_help", "Help"),
         Binding("ctrl+t", "toggle_voice", "Talk"),
+        Binding("ctrl+g", "open_history", "History"),
     ]
 
     TITLE = "◢◤ OBLIVION ◥◣"
@@ -1954,6 +2055,60 @@ class OblivionApp(App):
     def action_clear_chat(self) -> None:
         self.query_one("#chat-log", RichLog).clear()
         self._clear_activity()
+
+
+    def action_open_history(self) -> None:
+        """Ctrl+P — show session history picker overlay."""
+        async def _on_pick(session_id):
+            if session_id is None:
+                return
+            await self._load_past_session(session_id)
+        self.push_screen(SessionPicker(), _on_pick)
+
+    async def _load_past_session(self, session_id: int) -> None:
+        """Replace current conversation with a past session and make it active."""
+        from db.store import load_session, get_session_stats
+        log = self.query_one("#chat-log", RichLog)
+
+        try:
+            history = load_session(session_id)
+            stats = get_session_stats(session_id)
+        except Exception as e:
+            log.write(f"[#febc2e]✗ Failed to load session #{session_id}: {e}[/#febc2e]")
+            return
+
+        # Replace agent conversation
+        self.agent.conversation = list(history)
+        self.session_id = session_id
+        self._clear_activity()
+        log.clear()
+
+        # Render replay header
+        log.write(Panel(
+            f"[bold #7b8cde]◆ RESUMED SESSION #{session_id}[/bold #7b8cde]\n\n"
+            f"[#9aa0b8]Name:[/#9aa0b8]     {stats['name']}\n"
+            f"[#9aa0b8]Messages:[/#9aa0b8] {stats['messages']}\n"
+            f"[#9aa0b8]Updated:[/#9aa0b8]  {stats['updated_at']}",
+            title="[#febc2e]→ LOADED[/#febc2e]",
+            border_style="#7b8cde",
+        ))
+
+        # Replay the messages (compact view)
+        for msg in history:
+            role = msg.get("role", "?")
+            text = msg.get("content", "")[:300]
+            if role == "user":
+                log.write(f"[bold #febc2e]YOU:[/bold #febc2e] {text}")
+            elif role == "assistant":
+                # Strip if it looks like an OBSERVATION wrapper
+                if text.startswith("OBSERVATION"):
+                    continue
+                log.write(Panel(
+                    text,
+                    title="[#7b8cde]M.E.E.R.A[/#7b8cde]",
+                    border_style="#7b8cde",
+                ))
+        self.update_status()
 
     def action_show_help(self) -> None:
         self.run_worker(self.handle_slash("/help"), exclusive=False)

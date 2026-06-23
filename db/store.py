@@ -68,3 +68,121 @@ def list_sessions() -> list:
     rows = c.execute("SELECT id, name, created_at, updated_at FROM sessions ORDER BY updated_at DESC").fetchall()
     c.close()
     return [dict(r) for r in rows]
+
+
+def get_session_preview(session_id: int, max_chars: int = 60) -> str:
+    """Get the first user message from a session (for display in sidebar)."""
+    c = _conn()
+    row = c.execute(
+        "SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY id LIMIT 1",
+        (session_id,)
+    ).fetchone()
+    c.close()
+    if not row:
+        return "(empty session)"
+    text = row["content"].strip().replace("\n", " ")
+    if len(text) > max_chars:
+        text = text[:max_chars] + "..."
+    return text
+
+
+def get_session_stats(session_id: int) -> dict:
+    """Return message count + last activity for a session."""
+    c = _conn()
+    count = c.execute(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+        (session_id,)
+    ).fetchone()[0]
+    sess = c.execute(
+        "SELECT name, created_at, updated_at FROM sessions WHERE id = ?",
+        (session_id,)
+    ).fetchone()
+    c.close()
+    if not sess:
+        return {"messages": 0, "name": "?", "created_at": "?", "updated_at": "?"}
+    return {
+        "messages": count,
+        "name": sess["name"],
+        "created_at": sess["created_at"],
+        "updated_at": sess["updated_at"],
+    }
+
+
+def rename_session(session_id: int, new_name: str) -> bool:
+    """Rename a session. Returns True on success."""
+    try:
+        c = _conn()
+        c.execute("UPDATE sessions SET name = ? WHERE id = ?", (new_name.strip(), session_id))
+        c.commit()
+        c.close()
+        return True
+    except Exception:
+        return False
+
+
+def delete_session(session_id: int) -> bool:
+    """Delete a session and all its messages. Returns True on success."""
+    try:
+        c = _conn()
+        c.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        c.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        c.commit()
+        c.close()
+        return True
+    except Exception:
+        return False
+
+
+def list_sessions_enriched(limit: int = 50) -> list:
+    """List sessions WITH preview + message count, ordered by most recent.
+
+    Returns: [{id, name, preview, messages, created_at, updated_at}, ...]
+    """
+    c = _conn()
+    rows = c.execute("""
+        SELECT s.id, s.name, s.created_at, s.updated_at,
+               (SELECT COUNT(*) FROM messages WHERE session_id = s.id) AS msg_count,
+               (SELECT content FROM messages
+                WHERE session_id = s.id AND role = 'user'
+                ORDER BY id LIMIT 1) AS first_msg
+        FROM sessions s
+        ORDER BY s.updated_at DESC
+        LIMIT ?
+    """, (limit,)).fetchall()
+    c.close()
+
+    out = []
+    for r in rows:
+        first = (r["first_msg"] or "(empty)").strip().replace("\n", " ")
+        if len(first) > 70:
+            first = first[:70] + "..."
+        out.append({
+            "id": r["id"],
+            "name": r["name"],
+            "preview": first,
+            "messages": r["msg_count"] or 0,
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+        })
+    return out
+
+
+def auto_rename_session_from_first_message(session_id: int) -> str:
+    """If session still has default 'Session YYYY-MM-DD HH:MM' name,
+    rename it from the first user message. Returns the new name."""
+    stats = get_session_stats(session_id)
+    name = stats.get("name", "")
+    # Only auto-rename if it still looks like the default timestamp name
+    if not name.startswith("Session 20"):
+        return name  # already custom-named
+    preview = get_session_preview(session_id, max_chars=50)
+    if preview == "(empty session)":
+        return name
+    # Clean preview into a title-ish string
+    title = preview.split("?")[0].split(".")[0].split(",")[0].strip()
+    if len(title) < 4:
+        return name
+    if len(title) > 50:
+        title = title[:50]
+    rename_session(session_id, title)
+    return title
