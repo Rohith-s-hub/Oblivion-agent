@@ -180,7 +180,9 @@ def new_workspace(name: str, location: str = "") -> str:
     from pathlib import Path as _Path
 
     home = _Path.home()
-    self_dir = (home / "ai-agent").resolve()
+    # Refuse to create workspaces inside the Oblivion package or config dirs
+    from agent.paths import oblivion_home as _ob_home
+    self_dir = _ob_home()
 
     # Sanitize name
     name = (name or "").strip().replace(" ", "-")
@@ -254,12 +256,14 @@ def new_workspace(name: str, location: str = "") -> str:
 
     # Persist to .env
     try:
-        env_path = home / "ai-agent" / ".env"
+        from agent.paths import config_env as _cfg
+        env_path = _cfg()
+        env_lines = []
         if env_path.exists():
             env_lines = env_path.read_text().splitlines()
-            env_lines = [l for l in env_lines if not l.startswith("WORKSPACE_DIR=")]
-            env_lines.append(f"WORKSPACE_DIR={new_ws}")
-            env_path.write_text("\n".join(env_lines) + "\n")
+        env_lines = [l for l in env_lines if not l.startswith("WORKSPACE_DIR=")]
+        env_lines.append(f"WORKSPACE_DIR={new_ws}")
+        env_path.write_text("\n".join(env_lines) + "\n")
     except Exception:
         pass
 

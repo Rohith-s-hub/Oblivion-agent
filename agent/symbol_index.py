@@ -2,7 +2,7 @@
 agent/symbol_index.py — SQLite-backed symbol index (Phase 2B.2)
 
 A lightweight, durable index of every function, class, method, and section
-across all indexed workspaces. Lives at ~/.ai-agent/symbols.db.
+across all indexed workspaces. Lives at ~/.oblivion/symbols.db.
 
 Powers the upcoming hybrid search (Phase 2B.3):
   - exact symbol lookup (instant)
@@ -26,8 +26,8 @@ from typing import Optional
 # Avoid circular import — chunker is independent
 from agent.code_chunker import Chunk
 
-DB_PATH = Path.home() / ".ai-agent" / "symbols.db"
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+from agent.paths import symbols_db
+DB_PATH = symbols_db()
 
 
 # ── Connection helper ───────────────────────────────────────────────────────

@@ -82,7 +82,9 @@ MODELS = {
         "supports_function_calling": True,
         "api_key_env": "GEMINI_API_KEY",
         "provider": "gemini",
-    },
+            "cost": "FREE (1500 req/day)",
+        "speed": "fast",
+},
     "gemini-pro": {
         "id": "gemini/gemini-2.5-pro",
         "description": "Gemini 2.5 Pro — smarter than Flash, slower, lower free quota",
@@ -91,7 +93,9 @@ MODELS = {
         "supports_function_calling": True,
         "api_key_env": "GEMINI_API_KEY",
         "provider": "gemini",
-    },
+            "cost": "FREE (1500 req/day)",
+        "speed": "fast",
+},
 }
 
 
@@ -141,7 +145,7 @@ def check_api_key(model_name: str) -> tuple[bool, str]:
     if not os.getenv(key_env):
         return False, (
             f"Missing API key for {info['provider']}. "
-            f"Add {key_env}=... to ~/ai-agent/.env then restart Oblivion."
+            f"Add {key_env}=... to ~/.oblivion/config.env then restart Oblivion."
         )
 
     return True, "ok"

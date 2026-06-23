@@ -22,8 +22,8 @@ SILENCE_THRESHOLD = 1200  # higher = tolerates more background noise
 SILENCE_DURATION = 1.2  # stop quicker once you stop talking
 MIN_RECORD_SECONDS = 0.8
 
-MODEL_DIR = Path.home() / ".ai-agent" / "whisper"
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
+from agent.paths import whisper_dir
+MODEL_DIR = whisper_dir()
 
 _whisper_model: Optional[WhisperModel] = None  # cleared via clear_model()
 
@@ -209,9 +209,12 @@ def transcribe(audio: np.ndarray, language: str = "en") -> str:
     # This dramatically improves accuracy for names, technical terms, and accents
     initial_prompt = (
         "User is a software developer named Rohit from Sivakasi, India. "
-        "They use coding terms: Python, JavaScript, Frappe, doctype, agent, "
-        "Oblivion, ReAct, LLM, function, class, file, folder, directory, "
-        "create, edit, delete, read, search, refactor, run, list."
+        "His AI assistant is named Meera (pronounced MEE-rah, spelled M-E-E-R-A). "
+        "The coding agent is called Oblivion. "
+        "Common phrases: 'Hey Meera', 'Meera, do this', 'thanks Meera', 'Oblivion'. "
+        "Coding terms: Python, JavaScript, Frappe, doctype, agent, ReAct, LLM, "
+        "function, class, file, folder, directory, create, edit, delete, "
+        "read, search, refactor, run, list."
     )
 
     segments, info = model.transcribe(

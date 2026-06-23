@@ -1,5 +1,6 @@
 import os
 import json
+import time
 from typing import Callable, Optional
 from dotenv import load_dotenv
 import litellm
@@ -11,152 +12,214 @@ console = Console()
 
 os.environ["OLLAMA_API_BASE"] = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 litellm.set_verbose = False
-litellm.drop_params = True  # silently drop unsupported params per-provider
+litellm.drop_params = True
+
+
+# ── Fallback config ─────────────────────────────────────────────────────────
+# Order: primary (whatever DEFAULT_MODEL is) → these in sequence
+FALLBACK_CHAIN = [
+    "ollama/qwen3-coder:480b-cloud",
+    "groq/llama-3.3-70b-versatile",
+    "groq/openai/gpt-oss-120b",
+    "gemini/gemini-2.5-flash",
+    "cerebras/llama-3.3-70b",
+]
+
+# How long to keep a model "exhausted" before retrying (seconds)
+EXHAUSTION_COOLDOWN = 300  # 5 minutes
+
+# Errors that trigger fallback (case-insensitive substring match)
+RETRYABLE_ERROR_HINTS = [
+    "503", "unavailable", "overloaded", "high demand",
+    "429", "rate limit", "quota", "exhausted", "too many requests",
+    "timeout", "timed out",
+    "connection", "connect", "network",
+    "internal server error", "500", "502", "504",
+]
+
+
+def _is_retryable(err: Exception) -> bool:
+    """Should we try the next model in the chain?"""
+    msg = str(err).lower()
+    return any(hint in msg for hint in RETRYABLE_ERROR_HINTS)
+
+
+def _short_error(err: Exception) -> str:
+    """One-line human-readable error for UI display."""
+    msg = str(err)
+    if "503" in msg or "overloaded" in msg.lower() or "high demand" in msg.lower():
+        return "service overloaded (503)"
+    if "429" in msg or "rate limit" in msg.lower() or "quota" in msg.lower():
+        return "rate limited / quota exceeded"
+    if "timeout" in msg.lower() or "timed out" in msg.lower():
+        return "timeout"
+    if "connect" in msg.lower() or "network" in msg.lower():
+        return "network error"
+    if "api key" in msg.lower() or "authentication" in msg.lower():
+        return "missing/invalid API key"
+    # truncate long errors
+    return msg[:80] + ("..." if len(msg) > 80 else "")
 
 
 class LLMClient:
+    # Class-level exhaustion tracking (per-session, in-memory only)
+    # {model_id: timestamp_when_marked_exhausted}
+    _exhausted: dict = {}
+
+    # UI hook — set by TUI to display fallback notifications
+    # signature: callback(message: str) -> None
+    on_fallback_notify: Optional[Callable[[str], None]] = None
+
     def __init__(self):
         self.max_tokens = int(os.getenv("MAX_TOKENS", "4096"))
         self.temperature = float(os.getenv("TEMPERATURE", "0.1"))
-        # Token tracking (cumulative across all calls in this session)
         self.total_input_tokens = 0
         self.total_output_tokens = 0
-        # Load persisted exhausted models from disk
-        LLMClient._exhausted_models = LLMClient._load_exhausted()
 
     @property
     def model(self) -> str:
         """Read model fresh each call - allows mid-session switching."""
         return os.getenv("DEFAULT_MODEL", "ollama/qwen3-coder:480b-cloud")
 
-    def chat(self, messages: list, stream: bool = True) -> str:
-        """Sync chat - prints stream to stdout (used by CLI)."""
-        try:
-            response = litellm.completion(
-                model=self.model,
-                messages=messages,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                stream=stream,
-            )
-            if stream:
-                full = ""
-                for chunk in response:
-                    delta = chunk.choices[0].delta.content or ""
-                    full += delta
-                    print(delta, end="", flush=True)
-                print()
-                # Rough token estimate for streamed responses
-                self.total_output_tokens += len(full) // 4
-                self.total_input_tokens += sum(len(m.get("content", "")) for m in messages) // 4
-                return full
-            else:
-                content = response.choices[0].message.content
-                if hasattr(response, "usage") and response.usage:
-                    self.total_input_tokens += response.usage.prompt_tokens or 0
-                    self.total_output_tokens += response.usage.completion_tokens or 0
-                return content
-        except Exception as e:
-            console.print(f"[red]LLM Error: {e}[/red]")
-            raise
-
-    # Smart fallback chain: try these in order if primary fails.
-    # All Groq models verified live as of fix date.
-    # Ordering: code-specialist first, then large generalists, then fast small, then Ollama.
-    FALLBACK_CHAIN = [
-        # PRIMARY: Gemini 2.5 Flash — 1M context, generous free tier
-        "gemini/gemini-2.5-flash",
-        # SECONDARY: Local Ollama (no rate limits, slow but reliable)
-        "ollama/qwen3-coder:480b-cloud",
-        # TERTIARY: Groq (fast but daily rate limit)
-        "groq/llama-3.3-70b-versatile",
-        # QUATERNARY: Other Groq options
-        "groq/openai/gpt-oss-120b",
-        "groq/meta-llama/llama-4-scout-17b-16e-instruct",
-        # EXTRA FREE: Cerebras (very fast, generous limits)
-        "cerebras/llama-3.3-70b",
-    ]
-    # Track which models are known-exhausted (persisted across restarts)
+    # ── Exhaustion tracking ─────────────────────────────────────────────────
     @classmethod
-    def _exhausted_file(cls):
-        from pathlib import Path as _P
-        d = _P.home() / ".ai-agent"
-        d.mkdir(parents=True, exist_ok=True)
-        return d / "exhausted_models.txt"
+    def _mark_exhausted(cls, model: str) -> None:
+        cls._exhausted[model] = time.time()
 
     @classmethod
-    def _load_exhausted(cls):
-        """In-memory only. Wipe any stale on-disk cache from old versions."""
+    def _is_exhausted(cls, model: str) -> bool:
+        """True if model was marked exhausted within the cooldown window."""
+        ts = cls._exhausted.get(model)
+        if ts is None:
+            return False
+        if time.time() - ts > EXHAUSTION_COOLDOWN:
+            # Cooldown expired — give it another shot
+            del cls._exhausted[model]
+            return False
+        return True
+
+    @classmethod
+    def reset_exhausted_models(cls) -> None:
+        """Clear all exhaustion marks (for /model reset command)."""
+        cls._exhausted.clear()
+
+    def _notify(self, msg: str) -> None:
+        """Send fallback notification to UI if hook is set."""
         try:
-            f = cls._exhausted_file()
-            if f.exists():
-                f.unlink()
+            if LLMClient.on_fallback_notify:
+                LLMClient.on_fallback_notify(msg)
         except Exception:
             pass
-        return set()
 
-    @classmethod
-    def _save_exhausted(cls, models: set):
-        """No-op. Exhaustion is per-session only, never persisted."""
-        pass
+    # ── Build the chain for this call ───────────────────────────────────────
+    def _build_chain(self) -> list:
+        """User's current /model choice first, then FALLBACK_CHAIN, dedup."""
+        primary = self.model
+        chain = [primary]
+        for m in FALLBACK_CHAIN:
+            if m not in chain:
+                chain.append(m)
+        return chain
 
-    # Loaded fresh from disk on each LLMClient instantiation
-    _exhausted_models: set = set()
-
-    def chat_stream(
-        self,
-        messages: list,
-        on_token=None,
-    ) -> str:
-        """LLM call with timeout. Non-streaming for slow network reliability."""
-        import litellm
-        model = self.model
-        try:
-            response = litellm.completion(
-                model=model,
-                messages=messages,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                stream=False,
-                timeout=90,
-            )
-            full = response.choices[0].message.content or ""
-            # Send all tokens at once to callback
-            if on_token and full:
-                on_token(full)
-            self.total_output_tokens += len(full) // 4
-            self.total_input_tokens += sum(len(m.get("content", "")) for m in messages) // 4
-            return full
-        except Exception as e:
-            raise
-
-
-    def reset_exhausted_models(self):
-        """Clear the exhausted-models cache (useful after quota resets)."""
-        self._exhausted_models.clear()
-        LLMClient._save_exhausted(set())
-        console.print("[green]Exhausted-models cache cleared (disk + memory).[/green]")
-
-    def _stream_with_model(self, model: str, messages: list, on_token) -> str:
-        """Internal: actual streaming call to a specific model."""
+    # ── Core: call one specific model (no fallback logic) ───────────────────
+    def _call_model(self, model: str, messages: list, on_token=None) -> str:
         response = litellm.completion(
             model=model,
             messages=messages,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
-            stream=True,
+            stream=False,
+            timeout=90,
         )
-        full = ""
-        for chunk in response:
-            delta = chunk.choices[0].delta.content or ""
-            if delta:
-                full += delta
-                if on_token:
-                    on_token(delta)
+        full = response.choices[0].message.content or ""
+        if on_token and full:
+            on_token(full)
         self.total_output_tokens += len(full) // 4
         self.total_input_tokens += sum(len(m.get("content", "")) for m in messages) // 4
         return full
 
+    # ── Public: streaming chat with auto-fallback ───────────────────────────
+    def chat_stream(self, messages: list, on_token=None) -> str:
+        """Try primary model. If it fails with retryable error, walk fallback chain.
+
+        Skips models marked exhausted in the last 5 minutes.
+        Notifies UI via on_fallback_notify hook when a swap happens.
+        """
+        chain = self._build_chain()
+        last_error = None
+        attempted = []
+
+        for model in chain:
+            if self._is_exhausted(model):
+                attempted.append(model + " (exhausted)")
+                continue
+
+            try:
+                if attempted:  # we're falling back, not on primary
+                    short = model.split("/")[-1][:30]
+                    self._notify("falling back to " + short + "...")
+                return self._call_model(model, messages, on_token)
+
+            except Exception as e:
+                last_error = e
+                attempted.append(model)
+
+                if not _is_retryable(e):
+                    # Non-retryable error (e.g. bad request, auth) — stop trying
+                    raise
+
+                # Retryable — mark exhausted, try next
+                self._mark_exhausted(model)
+                short = model.split("/")[-1][:30]
+                err_brief = _short_error(e)
+                self._notify(short + " " + err_brief + " - trying next...")
+                continue
+
+        # All models exhausted
+        tried = ", ".join(m.split("/")[-1][:20] for m in chain)
+        raise RuntimeError(
+            "All " + str(len(chain)) + " models in fallback chain failed. "
+            "Tried: " + tried + ". "
+            "Last error: " + _short_error(last_error) if last_error else "unknown"
+        )
+
+    # ── CLI-compatible non-streaming chat ───────────────────────────────────
+    def chat(self, messages: list, stream: bool = True) -> str:
+        """Sync chat - used by CLI main.py."""
+        if stream:
+            # Use the fallback-aware streaming path
+            return self.chat_stream(messages, on_token=lambda t: print(t, end="", flush=True))
+
+        # Non-streaming with fallback too
+        chain = self._build_chain()
+        last_error = None
+        for model in chain:
+            if self._is_exhausted(model):
+                continue
+            try:
+                response = litellm.completion(
+                    model=model,
+                    messages=messages,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    stream=False,
+                    timeout=90,
+                )
+                content = response.choices[0].message.content
+                if hasattr(response, "usage") and response.usage:
+                    self.total_input_tokens += response.usage.prompt_tokens or 0
+                    self.total_output_tokens += response.usage.completion_tokens or 0
+                return content
+            except Exception as e:
+                last_error = e
+                if not _is_retryable(e):
+                    raise
+                self._mark_exhausted(model)
+                continue
+
+        raise RuntimeError("All models failed. Last: " + _short_error(last_error))
+
+    # ── Stats & utilities ───────────────────────────────────────────────────
     def get_token_stats(self) -> dict:
         return {
             "input": self.total_input_tokens,
@@ -167,6 +230,22 @@ class LLMClient:
     def reset_token_stats(self):
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+
+    def get_exhausted_models(self) -> list:
+        """Return list of currently exhausted models with seconds-until-retry."""
+        now = time.time()
+        out = []
+        for model, ts in list(LLMClient._exhausted.items()):
+            elapsed = now - ts
+            if elapsed > EXHAUSTION_COOLDOWN:
+                del LLMClient._exhausted[model]
+                continue
+            out.append({
+                "model": model,
+                "exhausted_for": int(elapsed),
+                "retry_in": int(EXHAUSTION_COOLDOWN - elapsed),
+            })
+        return out
 
     def chat_json(self, messages: list) -> dict:
         json_messages = messages + [{
@@ -182,5 +261,5 @@ class LLMClient:
         try:
             return json.loads(raw)
         except json.JSONDecodeError as e:
-            console.print(f"[yellow]JSON parse failed: {e}[/yellow]")
+            console.print("[yellow]JSON parse failed: " + str(e) + "[/yellow]")
             return {"error": "invalid_json", "raw": raw}

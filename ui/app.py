@@ -88,17 +88,73 @@ SLASH_COMMANDS = [
     ("/openproject <name>",     "Switch workspace to an existing project"),
     ("/projects",               "List all projects in ~/Projects/"),
     ("/model",        "List or switch LLM model"),
-    ("/model qwen-coder",      "Switch to Qwen3 Coder (free, default)"),
-    ("/model groq-llama",      "Switch to Groq Llama 3.3 (free, BLAZING)"),
-    ("/model groq-deepseek",   "Switch to Groq DeepSeek R1 (free, thinking)"),
-    ("/model claude-sonnet",   "Switch to Claude Sonnet 4 (paid, best)"),
-    ("/model deepseek",        "Switch to DeepSeek (cheap, smart)"),
+    ("/model reset",  "Clear exhausted-models cache (retry all)"),
+]
+
+# Auto-append every model from the registry so the dropdown always shows ALL options.
+# Add this AFTER initial SLASH_COMMANDS list above.
+try:
+    from agent.models import MODELS as _REG
+    _model_entries = []
+    for _name, _info in _REG.items():
+        _desc = _info.get("description", "")[:50]
+        _cost = _info.get("cost", "")
+        _label = f"Switch to {_name} ({_cost})"[:55]
+        _model_entries.append((f"/model {_name}", _label))
+    SLASH_COMMANDS_MODEL_APPEND = _model_entries
+except Exception:
+    SLASH_COMMANDS_MODEL_APPEND = []
+
+# Re-extend the main list with the dynamic model entries
+SLASH_COMMANDS = SLASH_COMMANDS[:0] + [
+    ("/help",         "Show all slash commands"),
+    ("/clear",        "Clear chat history"),
+    ("/index",        "Re-index changed files (incremental)"),
+    ("/index status", "Show current chunk count"),
+    ("/watch",        "Toggle file watcher (auto-reindex)"),
+    ("/watch status", "Show watcher status"),
+    ("/voice",        "Start voice recording (same as F2)"),
+    ("/voice record", "Same as F2 — start recording"),
+    ("/voice status", "Show voice settings"),
+    ("/voice devices", "List audio input devices"),
+    ("/voice model medium", "Switch Whisper model"),
+    ("/meera",                  "M.E.E.R.A. status"),
+    ("/meera on",               "Enable voice replies (MEERA mode)"),
+    ("/meera off",              "Disable voice replies"),
+    ("/meera stop",             "Stop current speech"),
+    ("/meera test",             "Test current voice"),
+    ("/meera persona aria",     "Aria - warm professional (default)"),
+    ("/meera persona jenny",    "Jenny - friendly conversational"),
+    ("/meera persona sonia",    "Sonia - British refined"),
+    ("/meera persona natasha",  "Natasha - Australian energetic"),
+    ("/meera persona emma",     "Emma - warm storyteller"),
+    ("/meera persona michelle", "Michelle - mature professional"),
+    ("/meera name boss",        "Change how Meera addresses you"),
+    ("/meera rate +20%",        "Speech rate (+/- percent)"),
+    ("/workspace",    "Show / set workspace directory"),
+    ("/newproject <name>",      "Create ~/Projects/<name>/ and switch into it"),
+    ("/openproject <name>",     "Switch workspace to an existing project"),
+    ("/projects",               "List all projects in ~/Projects/"),
+    ("/model",        "List or switch LLM model"),
+    ("/model reset",  "Clear exhausted-models cache (retry all)"),
     ("/save",         "Save current session"),
     ("/load",         "Resume a saved session"),
     ("/sessions",     "List all saved sessions"),
     ("/stats",        "Show conversation stats"),
     ("/quit",         "Exit Oblivion"),
 ]
+
+# ── Auto-extend SLASH_COMMANDS with every model from the registry ──
+# This way new models added to agent/models.py automatically appear in autocomplete
+try:
+    from agent.models import MODELS as _MODEL_REGISTRY
+    for _mname, _minfo in _MODEL_REGISTRY.items():
+        _cost = _minfo.get("cost", "")
+        _provider = _minfo.get("provider", "")
+        _label = f"Switch to {_mname} [{_provider}] {_cost}"[:60]
+        SLASH_COMMANDS.append((f"/model {_mname}", _label))
+except Exception:
+    pass
 
 
 # ── Approval Modal ────────────────────────────────────────────────────────────
@@ -551,6 +607,19 @@ class OblivionApp(App):
         self.update_status()
         self._populate_tree()
 
+        # Wire LLM fallback notifications into the chat log
+        from agent.llm import LLMClient
+        def _on_fallback(msg: str):
+            try:
+                log = self.query_one("#chat-log", RichLog)
+                self.call_from_thread(
+                    log.write,
+                    "[#febc2e]↻ " + msg + "[/#febc2e]",
+                )
+            except Exception:
+                pass
+        LLMClient.on_fallback_notify = _on_fallback
+
         # Drive animations - 100ms tick rate (10fps)
         self.set_interval(0.1, self._animate_tick)
         # M.E.E.R.A. waveform tick (Pattern G)
@@ -744,7 +813,9 @@ class OblivionApp(App):
         workspace = Path(os.getenv("WORKSPACE_DIR", ".")).expanduser().resolve()
         # GUARD: if saved workspace was deleted (e.g. /tmp cleanup), fall back gracefully
         if not workspace.exists() or not workspace.is_dir():
-            fallback = Path.home() / "ai-agent"
+            # When user's saved workspace is missing, fall back to a safe default
+            fallback = Path.home() / "Projects"
+            fallback.mkdir(parents=True, exist_ok=True)
             try:
                 log = self.query_one("#chat-log", RichLog)
                 log.write(f"[#febc2e]⚠ Saved workspace missing: {workspace}[/#febc2e]")
@@ -791,6 +862,26 @@ class OblivionApp(App):
                 self._run_agent("Continue the previous task from where you left off. Use the conversation history to know what files are already done and what still needs to be built."),
                 exclusive=True,
             )
+            return True
+
+        if command == "/auto":
+            from tools.auto import auto_build, auto_test, auto_serve, auto_clean, auto_check
+            log = self.query_one("#chat-log", RichLog)
+            if not arg:
+                log.write("[#7b8cde]Usage: /auto build | test | serve | clean | check[/#7b8cde]")
+                return True
+            sub = arg.strip().lower()
+            log.write(f"[dim]Running /auto {sub}...[/dim]")
+            try:
+                if sub == "build": result = auto_build()
+                elif sub == "test": result = auto_test()
+                elif sub == "serve": result = auto_serve()
+                elif sub == "clean": result = auto_clean()
+                elif sub == "check": result = auto_check()
+                else: result = "Unknown: /auto " + sub
+                log.write(Panel(result, title="[#7b8cde]/auto " + sub + "[/#7b8cde]", border_style="#3e4560"))
+            except Exception as e:
+                log.write(f"Error: {e}")
             return True
 
         if command == "/help":
@@ -876,12 +967,12 @@ class OblivionApp(App):
                     return True
                 os.environ["WORKSPACE_DIR"] = expanded
                 # Persist to .env
-                env_path = Path.home() / "ai-agent" / ".env"
-                if env_path.exists():
-                    lines = env_path.read_text().splitlines()
-                    new_lines = [l for l in lines if not l.startswith("WORKSPACE_DIR=")]
-                    new_lines.append(f"WORKSPACE_DIR={expanded}")
-                    env_path.write_text("\n".join(new_lines) + "\n")
+                from agent.paths import config_env as _cfg
+                env_path = _cfg()
+                lines = env_path.read_text().splitlines() if env_path.exists() else []
+                new_lines = [l for l in lines if not l.startswith("WORKSPACE_DIR=")]
+                new_lines.append(f"WORKSPACE_DIR={expanded}")
+                env_path.write_text("\n".join(new_lines) + "\n")
                 log.write(f"[#7b8cde]✓ Workspace set to:[/#7b8cde] {expanded}")
                 log.write("[#febc2e]◢ Run /index to index the new workspace[/#febc2e]")
                 self._populate_tree()
@@ -916,7 +1007,8 @@ class OblivionApp(App):
                 return True
 
             raw = arg.strip()
-            self_dir = (Path.home() / "ai-agent").resolve()
+            from agent.paths import oblivion_home as _ob_home
+            self_dir = _ob_home()
 
             # Decide: is this a PATH (anywhere) or a NAME (goes in ~/Projects/)?
             is_path = (
@@ -946,7 +1038,7 @@ class OblivionApp(App):
             try:
                 new_project.relative_to(self_dir)
                 log.write("[#febc2e]✗ Refused: that path is inside the agent source dir.[/#febc2e]")
-                log.write("[dim]Pick a location outside ~/ai-agent[/dim]")
+                log.write("[dim]Pick a location outside ~/.oblivion[/dim]")
                 return True
             except ValueError:
                 pass
@@ -1004,7 +1096,7 @@ class OblivionApp(App):
         if command == "/openproject":
             if not arg:
                 log.write("[#febc2e]✗ Usage: /openproject <name-or-path>[/#febc2e]")
-                log.write("[dim]Examples:  /openproject myapp   |  /openproject /home/rohit/ai-agent  |  /openproject ~/code[/dim]")
+                log.write("[dim]Examples:  /openproject myapp   |  /openproject ~/Projects/foo   |  /openproject ~/code[/dim]")
                 return True
 
             raw = arg.strip()
@@ -1097,8 +1189,8 @@ class OblivionApp(App):
                     ok, _ = check_api_key(m["name"])
                     key_status = "" if ok else "  [#febc2e](no key)[/#febc2e]"
                     lines.append(
-                        f"{marker} [bold {m['color']}]{m['name']:<15}[/bold {m['color']}] "
-                        f"[#9aa0b8]{m['cost']:<20}[/#9aa0b8] "
+                        f"{marker} [bold {m.get('color', '#7b8cde')}]{m['name']:<15}[/bold {m.get('color', '#7b8cde')}] "
+                        f"[#9aa0b8]{m.get('cost', ''):<20}[/#9aa0b8] "
                         f"[dim]{m['description']}[/dim]{key_status}"
                     )
                 lines.append("")
@@ -1129,12 +1221,12 @@ class OblivionApp(App):
                 full_id = info["id"]
                 os.environ["DEFAULT_MODEL"] = full_id
 
-                env_path = Path.home() / "ai-agent" / ".env"
-                if env_path.exists():
-                    lines = env_path.read_text().splitlines()
-                    new_lines = [l for l in lines if not l.startswith("DEFAULT_MODEL=")]
-                    new_lines.append(f"DEFAULT_MODEL={full_id}")
-                    env_path.write_text("\n".join(new_lines) + "\n")
+                from agent.paths import config_env as _cfg
+                env_path = _cfg()
+                lines = env_path.read_text().splitlines() if env_path.exists() else []
+                new_lines = [l for l in lines if not l.startswith("DEFAULT_MODEL=")]
+                new_lines.append(f"DEFAULT_MODEL={full_id}")
+                env_path.write_text("\n".join(new_lines) + "\n")
 
                 # No need to reload agent - LLMClient.model is dynamic now
                 log.write(Panel(
@@ -1152,12 +1244,12 @@ class OblivionApp(App):
             # Try raw model id (e.g. "ollama/qwen3-coder:480b-cloud")
             if "/" in model_name:
                 os.environ["DEFAULT_MODEL"] = model_name
-                env_path = Path.home() / "ai-agent" / ".env"
-                if env_path.exists():
-                    lines = env_path.read_text().splitlines()
-                    new_lines = [l for l in lines if not l.startswith("DEFAULT_MODEL=")]
-                    new_lines.append(f"DEFAULT_MODEL={model_name}")
-                    env_path.write_text("\n".join(new_lines) + "\n")
+                from agent.paths import config_env as _cfg
+                env_path = _cfg()
+                lines = env_path.read_text().splitlines() if env_path.exists() else []
+                new_lines = [l for l in lines if not l.startswith("DEFAULT_MODEL=")]
+                new_lines.append(f"DEFAULT_MODEL={model_name}")
+                env_path.write_text("\n".join(new_lines) + "\n")
                 log.write(f"[#7b8cde]✓ Switched to (raw):[/#7b8cde] {model_name}")
                 self.update_status()
                 return True
@@ -1173,8 +1265,8 @@ class OblivionApp(App):
             if not arg:
                 log.write("[#febc2e]Usage: /save <name>[/#febc2e]")
                 return True
-            save_dir = Path.home() / ".ai-agent" / "sessions"
-            save_dir.mkdir(parents=True, exist_ok=True)
+            from agent.paths import sessions_dir as _sess
+            save_dir = _sess()
             import json
             (save_dir / f"{arg}.json").write_text(
                 json.dumps(self.agent.conversation, indent=2)
@@ -1186,7 +1278,8 @@ class OblivionApp(App):
             if not arg:
                 log.write("[#febc2e]Usage: /load <name>[/#febc2e]")
                 return True
-            save_path = Path.home() / ".ai-agent" / "sessions" / f"{arg}.json"
+            from agent.paths import sessions_dir as _sess
+            save_path = _sess() / f"{arg}.json"
             if not save_path.exists():
                 log.write(f"[#febc2e]✗ Session not found: {arg}[/#febc2e]")
                 return True
@@ -1196,8 +1289,9 @@ class OblivionApp(App):
             return True
 
         if command == "/sessions":
-            save_dir = Path.home() / ".ai-agent" / "sessions"
-            if not save_dir.exists() or not list(save_dir.iterdir()):
+            from agent.paths import sessions_dir as _sess
+            save_dir = _sess()
+            if not list(save_dir.iterdir()):
                 log.write("[dim]No saved sessions yet. Use /save <name>[/dim]")
             else:
                 sessions = sorted(save_dir.glob("*.json"))
@@ -1259,7 +1353,7 @@ class OblivionApp(App):
                     f"[#7b8cde]Name:[/#7b8cde]     {fri.get_name()}\n"
                     f"[#7b8cde]Rate:[/#7b8cde]     {fri.get_rate()}\n"
                     f"[#7b8cde]Volume:[/#7b8cde]   {fri.get_volume()}\n"
-                    f"\n[dim]Personas:[/dim] {', '.join(fri.VOICES.keys())}",
+                    f"\n[dim]Personas:[/dim] {', '.join(getattr(fri, 'EDGE_VOICES', getattr(fri, 'VOICES', {})).keys())}",
                     title="[#3e4560]M.E.E.R.A. STATUS[/#3e4560]",
                     border_style="#3e4560",
                 ))
@@ -1288,13 +1382,13 @@ class OblivionApp(App):
                 return True
             if arg.startswith("persona "):
                 persona = arg.replace("persona ", "", 1).strip().lower()
-                if persona in fri.VOICES:
+                if persona in getattr(fri, 'EDGE_VOICES', getattr(fri, 'VOICES', {})):
                     os.environ["FRIDAY_VOICE"] = persona
                     self._update_env("FRIDAY_VOICE", persona)
-                    log.write(f"[#7b8cde]Voice persona: {persona} ({fri.VOICES[persona]})[/#7b8cde]")
+                    log.write(f"[#7b8cde]Voice persona: {persona} ({getattr(fri, 'EDGE_VOICES', getattr(fri, 'VOICES', {}))[persona]})[/#7b8cde]")
                     fri.speak(f"Voice updated, {fri.get_name()}.")
                 else:
-                    log.write(f"[#febc2e]Unknown persona. Try: {', '.join(fri.VOICES.keys())}[/#febc2e]")
+                    log.write(f"[#febc2e]Unknown persona. Try: {', '.join(getattr(fri, 'EDGE_VOICES', getattr(fri, 'VOICES', {})).keys())}[/#febc2e]")
                 return True
             if arg.startswith("name "):
                 new_name = arg.replace("name ", "", 1).strip()
@@ -1339,12 +1433,12 @@ class OblivionApp(App):
                 model_name = arg.replace("model ", "", 1).strip()
                 from agent import voice
                 voice.clear_model()
-                env_path = Path.home() / "ai-agent" / ".env"
-                if env_path.exists():
-                    lines = env_path.read_text().splitlines()
-                    new_lines = [l for l in lines if not l.startswith("VOICE_MODEL=")]
-                    new_lines.append(f"VOICE_MODEL={model_name}")
-                    env_path.write_text("\n".join(new_lines) + "\n")
+                from agent.paths import config_env as _cfg
+                env_path = _cfg()
+                lines = env_path.read_text().splitlines() if env_path.exists() else []
+                new_lines = [l for l in lines if not l.startswith("VOICE_MODEL=")]
+                new_lines.append(f"VOICE_MODEL={model_name}")
+                env_path.write_text("\n".join(new_lines) + "\n")
                 os.environ["VOICE_MODEL"] = model_name
                 log.write(f"[#7b8cde]✓ Whisper model set to: {model_name}[/#7b8cde]")
                 log.write("[dim]Will load on next voice recording.[/dim]")
@@ -1769,7 +1863,7 @@ class OblivionApp(App):
             path = args.get("path", "")
             content = args.get("content", "")
 
-            # Resolve against active workspace, not ~/ai-agent CWD
+            # Resolve against active workspace, not the Oblivion install dir
             try:
                 from tools.filesystem import _safe_path, _PathError
                 p = _safe_path(path)
@@ -1794,7 +1888,7 @@ class OblivionApp(App):
             path = args.get("path", "")
             old, new = args.get("old_text", ""), args.get("new_text", "")
 
-            # Resolve against active workspace, not ~/ai-agent CWD
+            # Resolve against active workspace, not the Oblivion install dir
             try:
                 from tools.filesystem import _safe_path, _PathError
                 p = _safe_path(path)
@@ -1941,12 +2035,10 @@ class OblivionApp(App):
             pass
 
     def _update_env(self, key: str, value: str):
-        """Persist a key=value to .env file."""
-        env_path = Path.home() / "ai-agent" / ".env"
-        if not env_path.exists():
-            env_path.write_text(f"{key}={value}\n")
-            return
-        lines = env_path.read_text().splitlines()
+        """Persist a key=value to ~/.oblivion/config.env."""
+        from agent.paths import config_env as _cfg
+        env_path = _cfg()
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
         new_lines = [l for l in lines if not l.startswith(f"{key}=")]
         new_lines.append(f"{key}={value}")
         env_path.write_text("\n".join(new_lines) + "\n")
@@ -1998,6 +2090,15 @@ def main():
     # Mark TUI mode so handlers/tools skip CLI-only Rich output & input prompts
     import os as _os
     _os.environ["OBLIVION_TUI"] = "1"
+
+    # First-run setup wizard + legacy migration + config load
+    # Runs ONLY if ~/.oblivion/config.env doesn't exist yet
+    try:
+        from agent.setup_wizard import maybe_run
+        maybe_run()
+    except Exception as _e:
+        print(f"[Oblivion] Setup wizard skipped: {_e}")
+
     # Pre-load Whisper model BEFORE Textual takes over the terminal.
     # This avoids multiprocessing/fds_to_keep errors when loading inside async.
     import os

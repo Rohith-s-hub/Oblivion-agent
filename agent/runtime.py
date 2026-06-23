@@ -13,7 +13,7 @@ The runtime emits events via callbacks so the UI layer can:
 without ever touching the core loop logic.
 
 Side benefits baked in:
-  - Per-session JSONL log at ~/.ai-agent/sessions/<session_id>.jsonl
+  - Per-session JSONL log at ~/.oblivion/sessions/<session_id>.jsonl
   - Tool timing (ms) surfaced via on_tool_done callback
 """
 from __future__ import annotations
@@ -91,8 +91,8 @@ def _summarize_conversation(conversation: list, keep_recent: int = 4) -> list:
     return [first_user, summary_msg] + recent
 
 # ── Session log ──────────────────────────────────────────────────────────────
-SESSIONS_DIR = Path.home() / ".ai-agent" / "sessions"
-SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+from agent.paths import sessions_dir as _sessions_dir
+SESSIONS_DIR = _sessions_dir()
 
 
 def _log_event(session_id: int, kind: str, data: dict) -> None:

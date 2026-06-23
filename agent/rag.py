@@ -1,7 +1,7 @@
 """
 RAG with incremental indexing.
 
-Tracks file hashes in ~/.ai-agent/file_hashes.json.
+Tracks file hashes in ~/.oblivion/file_hashes.json.
 Only re-embeds files whose content has changed.
 """
 import os
@@ -23,8 +23,9 @@ load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 WORKSPACE = Path(os.getenv("WORKSPACE_DIR", ".")).expanduser().resolve()
-INDEX_DIR = Path.home() / ".ai-agent" / "chroma"
-HASH_FILE = Path.home() / ".ai-agent" / "file_hashes.json"
+from agent.paths import chroma_dir, hash_file as _hash_file
+INDEX_DIR = chroma_dir()
+HASH_FILE = _hash_file()
 EMBED_MODEL = os.getenv("EMBED_MODEL", "all-minilm")
 OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 PARALLEL_EMBEDDINGS = int(os.getenv("PARALLEL_EMBEDDINGS", "8"))
