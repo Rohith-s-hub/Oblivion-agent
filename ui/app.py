@@ -368,9 +368,6 @@ class ActivityItem(Static):
 
 # ── Main App ──────────────────────────────────────────────────────────────────
 class OblivionApp(App):
-    # Disable Textual's built-in Ctrl+P command palette - we have our own /commands
-    ENABLE_COMMAND_PALETTE = False
-
     CSS = """
     Screen {
         background: #0d0f14;
@@ -2259,6 +2256,48 @@ class OblivionApp(App):
 
 
 def main():
+    # ── Subcommand dispatcher ─────────────────────────────────────────────
+    # Usage:
+    #   oblivion              -> launch TUI (default)
+    #   oblivion mcp          -> run as MCP server (stdio)
+    #   oblivion init         -> force-run setup wizard
+    #   oblivion --version    -> print version
+    #   oblivion --help       -> print help
+    import sys as _sys
+
+    argv = _sys.argv[1:]
+    if argv:
+        cmd = argv[0].lower()
+        if cmd in ("--version", "-v", "version"):
+            try:
+                from importlib.metadata import version
+                print("oblivion-agent " + version("oblivion-agent"))
+            except Exception:
+                print("oblivion-agent (dev)")
+            return
+        if cmd in ("--help", "-h", "help"):
+            print("Oblivion - terminal AI coding agent")
+            print()
+            print("Usage:")
+            print("  oblivion              Launch the TUI (default)")
+            print("  oblivion mcp          Run as MCP server (for Claude Desktop, etc.)")
+            print("  oblivion init         Re-run the setup wizard")
+            print("  oblivion --version    Print version")
+            print()
+            print("Config:  ~/.oblivion/config.env")
+            print("Docs:    https://github.com/rohit/oblivion-agent")
+            return
+        if cmd == "mcp":
+            from mcp_server.server import main as mcp_main
+            mcp_main()
+            return
+        if cmd == "init":
+            from agent.setup_wizard import run_wizard
+            run_wizard()
+            print("\nLaunching Oblivion...\n")
+            # fall through to TUI launch
+
+    # ── Default: launch the TUI ───────────────────────────────────────────
     # Mark TUI mode so handlers/tools skip CLI-only Rich output & input prompts
     import os as _os
     _os.environ["OBLIVION_TUI"] = "1"
