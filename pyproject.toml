@@ -1,21 +1,25 @@
 [project]
 name = "oblivion-agent"
-version = "2.5.3"
-description = "OBLIVION — AI coding agent with voice, RAG, and multi-model support. Powered by M.E.E.R.A."
+version = "2.7.0"
+description = "OBLIVION - Terminal AI coding agent with voice, RAG, and multi-model support. Powered by Meera."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
-authors = [
-    {name = "R. Rohit", email = "rohit@example.com"},
-]
-keywords = ["ai", "agent", "coding", "llm", "voice", "rag", "tui"]
+authors = [{name = "R. Rohit"}]
+keywords = ["ai", "agent", "coding", "llm", "voice", "rag", "tui", "claude", "gemini", "groq", "ollama", "whisper"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Code Generators",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
 ]
 
 dependencies = [
@@ -39,12 +43,8 @@ voice = [
     "numpy>=2.0.0",
     "scipy>=1.13.0",
 ]
-premium-voice = [
-    "elevenlabs>=1.0.0",
-]
-all = [
-    "oblivion-agent[voice,premium-voice]",
-]
+premium-voice = ["elevenlabs>=1.0.0"]
+all = ["oblivion-agent[voice,premium-voice]"]
 
 [project.scripts]
 oblivion = "ui.app:main"
@@ -52,6 +52,7 @@ oblivion = "ui.app:main"
 [project.urls]
 Homepage = "https://github.com/rohit/oblivion-agent"
 Repository = "https://github.com/rohit/oblivion-agent"
+Issues = "https://github.com/rohit/oblivion-agent/issues"
 
 [build-system]
 requires = ["hatchling"]
@@ -59,4 +60,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agent", "tools", "db", "ui", "knowledge"]
-

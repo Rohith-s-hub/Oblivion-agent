@@ -30,7 +30,17 @@ from tools.diff import make_diff
 from db.store import init_db, create_session, save_message, load_session, list_sessions
 from agent.watcher import FileWatcher
 from agent.models import MODELS, get_current_model_info, check_api_key, list_models_table
-from agent.voice import VoiceRecorder, transcribe, get_whisper_model, list_input_devices
+try:
+    from agent.voice import (
+        VoiceRecorder, transcribe, get_whisper_model, list_input_devices,
+        VOICE_AVAILABLE,
+    )
+except ImportError:
+    VOICE_AVAILABLE = False
+    VoiceRecorder = None
+    transcribe = lambda *a, **kw: ""
+    get_whisper_model = lambda *a, **kw: None
+    list_input_devices = lambda: []
 from agent import friday
 import threading
 import numpy as np
@@ -1949,7 +1959,14 @@ class OblivionApp(App):
         self.run_worker(self.handle_slash("/help"), exclusive=False)
 
     def action_toggle_voice(self) -> None:
-        """F2 hotkey - start/stop voice recording."""
+        """Ctrl+T hotkey - start/stop voice recording."""
+        if not VOICE_AVAILABLE:
+            log = self.query_one("#chat-log", RichLog)
+            log.write(
+                "[#febc2e]⚠  Voice not installed.[/#febc2e] "
+                "Install with: [bold]pip install \"oblivion-agent[voice]\"[/bold]"
+            )
+            return
         if self.voice_recording:
             # Stop current recording
             self._stop_voice_recording()
@@ -2102,15 +2119,16 @@ def main():
     # Pre-load Whisper model BEFORE Textual takes over the terminal.
     # This avoids multiprocessing/fds_to_keep errors when loading inside async.
     import os
-    if os.getenv("OBLIVION_PRELOAD_VOICE", "1") == "1":
+    if os.getenv("OBLIVION_PRELOAD_VOICE", "1") == "1" and VOICE_AVAILABLE:
         try:
             print("[Oblivion] Pre-loading Whisper model (one-time)...")
-            from agent.voice import get_whisper_model
             get_whisper_model()
             print("[Oblivion] Voice ready.")
         except Exception as e:
             print(f"[Oblivion] Voice unavailable: {e}")
             print("[Oblivion] (Continuing without voice - text input still works)")
+    elif not VOICE_AVAILABLE:
+        print("[Oblivion] Voice not installed (pip install oblivion-agent[voice]). Text mode.")
 
     app = OblivionApp()
     app.run()

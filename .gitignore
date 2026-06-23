@@ -1,10 +1,49 @@
-.venv/
+# Python
 __pycache__/
-*.pyc
-.env
-uv.lock
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+*.egg-info/
+
+# Build artifacts
+build/
+dist/
+*.whl
+*.tar.gz
+
+# Test files at repo root (user playground)
 hello.py
-=3.14
+broken.py
+brain_test.py
+fact.py
+sample.py
+index.html
+styles.css
+script.js
+package.json
+package-lock.json
+tsconfig.json
+Key.java
+Key.class
+Untitled.java
+LLM2
+q
+
+# Config + secrets
+.env
+.env.backup
+.env.bak
+.env.bak-*
+
+# Editor
 .DS_Store
 *.swp
+.idea/
+.vscode/
+
+# Runtime data
 .chroma/
+.ai-agent/

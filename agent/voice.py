@@ -10,9 +10,20 @@ import wave
 from pathlib import Path
 from typing import Optional, Callable
 
-import numpy as np
-import sounddevice as sd
-from faster_whisper import WhisperModel
+# Voice deps are OPTIONAL. Install via: pip install oblivion-agent[voice]
+# If missing, voice tools raise a friendly error instead of crashing at import.
+try:
+    import numpy as np
+    import sounddevice as sd
+    from faster_whisper import WhisperModel
+    VOICE_AVAILABLE = True
+    _VOICE_IMPORT_ERROR = None
+except ImportError as _e:
+    VOICE_AVAILABLE = False
+    _VOICE_IMPORT_ERROR = str(_e)
+    np = None  # type: ignore
+    sd = None  # type: ignore
+    WhisperModel = None  # type: ignore
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
@@ -28,7 +39,14 @@ MODEL_DIR = whisper_dir()
 _whisper_model: Optional[WhisperModel] = None  # cleared via clear_model()
 
 
-def get_whisper_model(model_size: str = None) -> WhisperModel:
+def get_whisper_model(model_size: str = None):
+    """Returns a loaded WhisperModel, or raises RuntimeError if voice deps missing."""
+    if not VOICE_AVAILABLE:
+        raise RuntimeError(
+            "Voice support not installed. Install with:\n"
+            "  pip install \"oblivion-agent[voice]\"\n"
+            f"(missing: {_VOICE_IMPORT_ERROR})"
+        )
     global _whisper_model
     if _whisper_model is not None:
         return _whisper_model
@@ -61,6 +79,8 @@ def clear_model():
 
 
 def list_input_devices() -> list[dict]:
+    if not VOICE_AVAILABLE:
+        return []
     devices = sd.query_devices()
     inputs = []
     for i, d in enumerate(devices):
@@ -75,6 +95,8 @@ def list_input_devices() -> list[dict]:
 
 
 def get_default_input_device() -> int:
+    if not VOICE_AVAILABLE:
+        return 0
     try:
         return sd.default.device[0]
     except Exception:
@@ -99,7 +121,9 @@ class VoiceRecorder:
     def stop(self):
         self._stop_flag.set()
 
-    def record(self) -> np.ndarray:
+    def record(self):
+        if not VOICE_AVAILABLE:
+            raise RuntimeError("Voice not installed. pip install oblivion-agent[voice]")
         self._stop_flag.clear()
         self._audio_buffer.clear()
         self._silence_start = None
@@ -153,11 +177,13 @@ class VoiceRecorder:
 
         return np.concatenate(self._audio_buffer)
 
-    def record_until_stopped(self) -> np.ndarray:
+    def record_until_stopped(self):
         """
         Press-to-talk mode: records continuously until .stop() is called.
         Does NOT use silence detection - good for noisy rooms.
         """
+        if not VOICE_AVAILABLE:
+            raise RuntimeError("Voice not installed. pip install oblivion-agent[voice]")
         self._stop_flag.clear()
         self._audio_buffer.clear()
         self._record_start = time.time()
@@ -194,7 +220,9 @@ class VoiceRecorder:
         return np.concatenate(self._audio_buffer)
 
 
-def transcribe(audio: np.ndarray, language: str = "en") -> str:
+def transcribe(audio, language: str = "en") -> str:
+    if not VOICE_AVAILABLE:
+        return ""
     """
     Transcribe audio via Whisper.
     Uses an initial prompt to bias toward coding terms and common Indian names.
