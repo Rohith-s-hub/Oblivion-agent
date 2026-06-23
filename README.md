@@ -43,6 +43,46 @@ A setup wizard will ask for your LLM provider (Gemini recommended, free).
 
 Lives at ~/.oblivion/config.env
 
+
+## Claude Desktop Integration (MCP)
+
+Oblivion ships an MCP server. Claude Desktop can use Oblivions 10 read-only code tools directly.
+
+### Setup
+
+1. Install Oblivion:    pip install oblivion-agent
+
+2. Find your Claude Desktop config file:
+   macOS:   ~/Library/Application Support/Claude/claude_desktop_config.json
+   Linux:   ~/.config/Claude/claude_desktop_config.json
+   Windows: %APPDATA%/Claude/claude_desktop_config.json
+
+3. Add this JSON to it:
+
+    {
+      "mcpServers": {
+        "oblivion": {
+          "command": "oblivion",
+          "args": ["mcp"],
+          "env": { "WORKSPACE_DIR": "/path/to/your/project" }
+        }
+      }
+    }
+
+4. Restart Claude Desktop. Done!
+
+### Exposed tools (read-only)
+
+read_file, list_dir, grep_files, file_exists, search_code,
+find_symbol, list_symbols, find_callers, project_map, recall
+
+Write tools are NOT exposed for safety. Use the Oblivion TUI for edits.
+
+### Testing
+
+    npx -y @modelcontextprotocol/inspector oblivion mcp
+
+
 ## License
 
 MIT
