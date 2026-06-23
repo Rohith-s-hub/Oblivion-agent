@@ -1743,12 +1743,13 @@ wheels = [
 
 [[package]]
 name = "oblivion-agent"
-version = "2.7.0"
+version = "2.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "chromadb" },
     { name = "edge-tts" },
+    { name = "elevenlabs" },
     { name = "httpx" },
     { name = "litellm" },
     { name = "mcp" },
@@ -1783,6 +1784,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20.0" },
     { name = "chromadb", specifier = ">=1.5.0" },
     { name = "edge-tts", specifier = ">=6.1.0" },
+    { name = "elevenlabs", specifier = ">=2.52.0" },
     { name = "elevenlabs", marker = "extra == 'premium-voice'", specifier = ">=1.0.0" },
     { name = "faster-whisper", marker = "extra == 'voice'", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },

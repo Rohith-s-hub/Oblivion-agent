@@ -1,6 +1,6 @@
 [project]
 name = "oblivion-agent"
-version = "2.7.0"
+version = "2.9.0"
 description = "OBLIVION - Terminal AI coding agent with voice, RAG, and multi-model support. Powered by Meera."
 readme = "README.md"
 license = {text = "MIT"}
@@ -35,6 +35,7 @@ dependencies = [
     "edge-tts>=6.1.0",
     "watchdog>=4.0.0",
     "mcp>=1.0.0",
+    "elevenlabs>=2.52.0",
 ]
 
 [project.optional-dependencies]
