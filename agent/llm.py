@@ -6,8 +6,6 @@ from dotenv import load_dotenv
 import litellm
 from rich.console import Console
 
-load_dotenv()
-
 console = Console()
 
 os.environ["OLLAMA_API_BASE"] = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -18,6 +16,11 @@ litellm.drop_params = True
 # ── Fallback config ─────────────────────────────────────────────────────────
 # Order: primary (whatever DEFAULT_MODEL is) → these in sequence
 FALLBACK_CHAIN = [
+    # Free OpenRouter models (cloud, no local hardware)
+    "openrouter/qwen/qwen3-coder:free",
+    "openrouter/openai/gpt-oss-120b:free",
+    "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+    # Original chain
     "ollama/qwen3-coder:480b-cloud",
     "groq/llama-3.3-70b-versatile",
     "groq/openai/gpt-oss-120b",
@@ -35,6 +38,9 @@ RETRYABLE_ERROR_HINTS = [
     "timeout", "timed out",
     "connection", "connect", "network",
     "internal server error", "500", "502", "504",
+    # Auth errors — likely stale/wrong key for THIS model; try next
+    "401", "unauthenticated", "invalid api key", "invalid_api_key",
+    "permission denied", "access_token_type_unsupported",
 ]
 
 

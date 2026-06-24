@@ -1637,6 +1637,87 @@ class OblivionApp(App):
                 ))
             return True
 
+        if command == "/update":
+            from agent.updater import current_version, has_update, install_update, changelog_url, latest_version
+            sub = arg.strip().lower()
+
+            if sub == "" or sub == "check":
+                log.write("[dim]Checking PyPI for newer version...[/dim]")
+                cur = current_version()
+                update = has_update()
+                if update is None:
+                    latest = latest_version()
+                    lv = latest['version'] if latest else 'unknown'
+                    log.write(Panel(
+                        f"[#7b8cde]Current:[/#7b8cde] {cur}\n"
+                        f"[#7b8cde]Latest:[/#7b8cde]  {lv}\n\n"
+                        f"[#7b8cde]✓ You're on the latest version.[/#7b8cde]",
+                        title="[#7b8cde]UPDATE CHECK[/#7b8cde]",
+                        border_style="#7b8cde",
+                    ))
+                else:
+                    log.write(Panel(
+                        f"[#febc2e]✨ Update available![/#febc2e]\n\n"
+                        f"[#7b8cde]Current:[/#7b8cde]      {update['current']}\n"
+                        f"[#7b8cde]Latest:[/#7b8cde]       [bold #febc2e]{update['latest']}[/bold #febc2e]\n"
+                        f"[#7b8cde]Released:[/#7b8cde]     {update['release_date']}\n"
+                        f"[#7b8cde]Changelog:[/#7b8cde]    {changelog_url(update['latest'])}\n\n"
+                        f"[dim]Run [bold #7b8cde]/update install[/bold #7b8cde] to upgrade now.[/dim]",
+                        title="[bold #febc2e]◆ NEW VERSION AVAILABLE ◆[/bold #febc2e]",
+                        border_style="#febc2e",
+                    ))
+                return True
+
+            if sub == "install" or sub == "upgrade":
+                update = has_update()
+                if update is None:
+                    log.write("[#7b8cde]✓ Already on latest version, nothing to install.[/#7b8cde]")
+                    return True
+                log.write(Panel(
+                    f"[#febc2e]Installing oblivion-agent {update['latest']}...[/#febc2e]\n"
+                    f"[dim]This may take 30-60 seconds. Running pip install --upgrade.[/dim]",
+                    border_style="#febc2e",
+                ))
+                # Run pip install in a thread to avoid blocking UI
+                import threading as _th
+                def _do_install():
+                    result = install_update()
+                    if result["ok"]:
+                        msg = (
+                            f"[#7b8cde]✓ Upgraded to {result['new_version']}![/#7b8cde]\n\n"
+                            f"[#febc2e]⚠ Restart Oblivion to use the new version:[/#febc2e]\n"
+                            f"  1. Type [bold]/quit[/bold]\n"
+                            f"  2. Run [bold]oblivion[/bold] again"
+                        )
+                        self.call_from_thread(log.write, Panel(
+                            msg,
+                            title="[#7b8cde]✓ UPDATE COMPLETE[/#7b8cde]",
+                            border_style="#7b8cde",
+                        ))
+                    else:
+                        tail = result["output"][-400:] if len(result["output"]) > 400 else result["output"]
+                        self.call_from_thread(log.write, Panel(
+                            f"[#febc2e]✗ Update failed[/#febc2e]\n\n[dim]{tail}[/dim]\n\n"
+                            f"[dim]Try manually: pip install --upgrade oblivion-agent[/dim]",
+                            title="[#febc2e]UPDATE FAILED[/#febc2e]",
+                            border_style="#febc2e",
+                        ))
+                _th.Thread(target=_do_install, daemon=True).start()
+                return True
+
+            if sub == "changelog":
+                log.write(Panel(
+                    f"[#7b8cde]Current version:[/#7b8cde] {current_version()}\n\n"
+                    f"[#7b8cde]Changelog:[/#7b8cde] {changelog_url()}\n"
+                    f"[#7b8cde]All releases:[/#7b8cde] https://github.com/Rohith-s-hub/Oblivion-agent/releases",
+                    title="[#3e4560]CHANGELOG[/#3e4560]",
+                    border_style="#3e4560",
+                ))
+                return True
+
+            log.write("[#febc2e]Usage: /update [check|install|changelog][/#febc2e]")
+            return True
+
         if command == "/quit":
             self._stop_watcher()
             if self.voice_stop_event is not None:

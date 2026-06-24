@@ -10,8 +10,6 @@ from agent.parser import parse_llm_output, ToolCall, FinalAnswer
 from tools.registry import get_tool_descriptions, dispatch
 from tools.diff import make_diff, print_diff, print_new_file, ask_approval
 
-load_dotenv()
-
 console = Console()
 MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS", "20"))
 

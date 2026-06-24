@@ -47,3 +47,7 @@ q
 # Runtime data
 .chroma/
 .ai-agent/
+
+# Archived old env files - NEVER commit
+.env.ARCHIVED-*
+.env.archived-*

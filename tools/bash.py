@@ -30,8 +30,6 @@ def is_dangerous_command(cmd: str) -> bool:
             return True
     return False
 
-load_dotenv()
-
 BLOCKED = {"rm -rf /", "rm -rf ~", ":(){ :|:& };:", "mkfs", "dd if=/dev/zero", "sudo rm -rf"}
 
 

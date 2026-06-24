@@ -4,8 +4,6 @@ from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
 
-load_dotenv()
-
 from agent.paths import agent_db as _agent_db
 DB_PATH = Path(os.getenv("DB_PATH")).expanduser() if os.getenv("DB_PATH") else _agent_db()
 
