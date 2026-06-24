@@ -152,6 +152,9 @@ SLASH_COMMANDS = SLASH_COMMANDS[:0] + [
     ("/sessions",     "List all saved sessions"),
     ("/stats",        "Show conversation stats"),
     ("/quit",         "Exit Oblivion"),
+    ("/update",       "Check PyPI for newer Oblivion version"),
+    ("/update install", "Upgrade to latest Oblivion via pip"),
+    ("/update changelog", "Show what's new in latest release"),
 ]
 
 # ── Auto-extend SLASH_COMMANDS with every model from the registry ──
