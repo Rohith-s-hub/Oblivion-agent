@@ -149,7 +149,7 @@ def run_wizard() -> bool:
         "DEFAULT_MODEL": provider["default_model"],
         "WORKSPACE_DIR": str(Path.cwd()),
         "MAX_ITERATIONS": "40",
-        "MAX_TOKENS": "1500",
+        "MAX_TOKENS": "4096",
         "TEMPERATURE": "0.05",
         "REQUIRE_APPROVAL_FOR_WRITE": "true",
         "REQUIRE_APPROVAL_FOR_BASH": "true",

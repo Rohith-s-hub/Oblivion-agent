@@ -1,6 +1,6 @@
 [project]
 name = "oblivion-agent"
-version = "2.10.2"
+version = "2.10.3"
 description = "OBLIVION - Terminal AI coding agent with voice, RAG, and multi-model support. Powered by Meera."
 readme = "README.md"
 license = {text = "MIT"}
@@ -52,9 +52,11 @@ all = ["oblivion-agent[voice,premium-voice]"]
 oblivion = "ui.app:main"
 
 [project.urls]
-Homepage = "https://github.com/rohit/oblivion-agent"
-Repository = "https://github.com/rohit/oblivion-agent"
-Issues = "https://github.com/rohit/oblivion-agent/issues"
+Homepage = "https://github.com/Rohith-s-hub/Oblivion-agent"
+Repository = "https://github.com/Rohith-s-hub/Oblivion-agent"
+Issues = "https://github.com/Rohith-s-hub/Oblivion-agent/issues"
+Documentation = "https://github.com/Rohith-s-hub/Oblivion-agent#readme"
+Changelog = "https://github.com/Rohith-s-hub/Oblivion-agent/releases"
 
 [build-system]
 requires = ["hatchling"]

@@ -5,9 +5,12 @@
 *Powered by M.E.E.R.A. (Multi-modal Engineering and Reasoning Assistant)*
 
 [![PyPI version](https://img.shields.io/pypi/v/oblivion-agent.svg)](https://pypi.org/project/oblivion-agent/)
+[![Downloads](https://static.pepy.tech/badge/oblivion-agent)](https://pepy.tech/project/oblivion-agent)
+[![Downloads/month](https://static.pepy.tech/badge/oblivion-agent/month)](https://pepy.tech/project/oblivion-agent)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![GitHub](https://img.shields.io/badge/github-Rohith--s--hub-blue.svg)](https://github.com/Rohith-s-hub/Oblivion-agent)
+[![GitHub Stars](https://img.shields.io/github/stars/Rohith-s-hub/Oblivion-agent?style=social)](https://github.com/Rohith-s-hub/Oblivion-agent)
+[![GitHub Issues](https://img.shields.io/github/issues/Rohith-s-hub/Oblivion-agent)](https://github.com/Rohith-s-hub/Oblivion-agent/issues)
 
 *"Code is conversation. Make it natural."* - Meera
 
@@ -633,31 +636,61 @@ API key invalid/expired. Get new one:
 
 Update `~/.oblivion/config.env` with the new key.
 
+### Windows support
+
+Oblivion is tested on Linux and macOS. On Windows, the recommended path is **WSL2**:
+
+1. Install WSL2: `wsl --install` (in PowerShell as admin)
+2. Install Ubuntu from Microsoft Store
+3. Inside WSL: `pip install oblivion-agent`
+4. Voice and audio work via WSL2 with Windows audio passthrough
+
+Native Windows support (without WSL) is untested. Patches welcome.
+
 ### Voice transcription gets my name wrong
 
 Edit `initial_prompt` in `agent/voice.py` to bias Whisper toward your vocabulary.
 
 ---
 
-## Version History
+## Major Milestones
 
-| Version | Date | Highlights |
-|---------|------|------------|
-| v0.1.0 | Jun 2026 | Working agent + diff approval + RAG |
-| v0.5.0 | Jun 2026 | Anti-hallucination (forces read_file) |
-| v1.0.0 | Jun 2026 | OBLIVION rebrand + cyberpunk theme |
-| v1.5.0 | Jun 2026 | Voice input (Whisper medium) |
-| v1.6.0 | Jun 2026 | M.E.E.R.A. voice personality (Edge TTS) |
-| v1.7.0 | Jun 2026 | ElevenLabs premium voice |
-| v2.0.0 | Jun 2026 | BRAIN: Memory + Verify + Planning |
-| v2.2.0 | Jun 2026 | Gemini + RAG cap + sliding context |
-| v2.5.0 | Jun 2026 | Status bar + /demo command |
-| v2.6.0 | Jun 2026 | Distribution ready: pip-installable |
-| v2.7.0 | Jun 2026 | Centralized paths + migration + setup wizard |
-| v2.8.0 | Jun 2026 | Session history sidebar (Ctrl+G) |
-| v2.9.0 | Jun 2026 | MCP server + subcommand CLI |
-| v2.10.0 | Jun 2026 | OpenRouter (4 free models) + /update command |
-| v2.10.1 | Jun 2026 | /update autocomplete fix |
+Oblivion was built in a focused sprint - from first commit to PyPI release in under a month.
+Below are the milestones that mattered, organized by what they unlocked:
+
+### Foundation (v0.x)
+- **v0.1.0** - First working ReAct agent with diff approval + RAG semantic search
+- **v0.5.0** - Anti-hallucination: agent now forced to `read_file` before quoting any code
+
+### Identity (v1.x)
+- **v1.0.0** - **OBLIVION** rebrand: cyberpunk Textual TUI + global `oblivion` command
+- **v1.5.0** - Voice input via Whisper (press-to-talk Ctrl+T)
+- **v1.6.0** - **M.E.E.R.A.** voice personality (free Edge TTS)
+- **v1.7.0** - Premium ElevenLabs voice integration
+
+### Intelligence (v2.0 - v2.5)
+- **v2.0.0** - **BRAIN**: persistent memory (MEMORY.md) + code verification + planning
+- **v2.2.0** - Gemini integration + sliding context window + task decomposition
+- **v2.5.0** - Status bar, demo command, polish for first public eyes
+
+### Distribution (v2.6 - v2.10)
+- **v2.6.0** - First pip-installable wheel built
+- **v2.7.0** - Centralized paths (`~/.oblivion/`) + migration + first-run setup wizard
+- **v2.8.0** - Session history sidebar (Ctrl+G) with SQLite-backed picker
+- **v2.9.0** - **MCP server** for Claude Desktop + subcommand CLI (`oblivion mcp`)
+- **v2.10.0** - 4 free OpenRouter models + **`/update`** self-upgrade command
+- **v2.10.1** - `/update` autocomplete fix
+- **v2.10.2** - Comprehensive README
+
+### Stats at v2.10+
+- 13 LLM backends across 7 providers
+- 22 tools for the agent
+- 10 read-only tools exposed via MCP
+- 13 domain knowledge packs
+- ~2100 lines of Textual TUI
+- 8-model auto-fallback chain
+- Built on a Lenovo V15 (13GB RAM, no GPU)
+
 
 ---
 
