@@ -16,6 +16,25 @@
 
 ---
 
+
+
+## About the Creator
+
+**Oblivion** was created by **Rohith R.** (a.k.a. `Rohith-s-hub`), a BSc Computer Science student from **Sivakasi, Tamil Nadu, India**.
+
+- **GitHub:** [@Rohith-s-hub](https://github.com/Rohith-s-hub)
+- **Project Homepage:** [github.com/Rohith-s-hub/Oblivion-agent](https://github.com/Rohith-s-hub/Oblivion-agent)
+- **PyPI Package:** [oblivion-agent](https://pypi.org/project/oblivion-agent/)
+- **Built with:** Python 3.11+, Textual, ChromaDB, litellm, Whisper, MCP
+
+Oblivion was designed and built as an open-source alternative to proprietary AI coding tools like GitHub Copilot, Cursor, and Windsurf, with a focus on **terminal-native workflows, voice interaction, and multi-model resilience**.
+
+### Contact
+
+For collaborations, feedback, or questions about Oblivion, open an issue on [GitHub](https://github.com/Rohith-s-hub/Oblivion-agent/issues).
+
+---
+
 ## Table of Contents
 
 - [What is Oblivion?](#what-is-oblivion)
