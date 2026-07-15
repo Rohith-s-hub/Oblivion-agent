@@ -184,3 +184,26 @@ def auto_rename_session_from_first_message(session_id: int) -> str:
         title = title[:50]
     rename_session(session_id, title)
     return title
+
+
+def cleanup_empty_sessions() -> int:
+    """Delete sessions that have zero messages. Called at boot.
+    Returns count deleted."""
+    try:
+        c = _conn()
+        # Find sessions with no messages
+        rows = c.execute("""
+            SELECT s.id FROM sessions s
+            LEFT JOIN messages m ON m.session_id = s.id
+            WHERE m.id IS NULL
+        """).fetchall()
+        ids = [r["id"] for r in rows]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            c.execute(f"DELETE FROM sessions WHERE id IN ({placeholders})", ids)
+            c.commit()
+        c.close()
+        return len(ids)
+    except Exception:
+        return 0
+

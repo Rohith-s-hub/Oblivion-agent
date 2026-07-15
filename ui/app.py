@@ -714,6 +714,12 @@ class OblivionApp(App):
 
     async def on_mount(self) -> None:
         init_db()
+        # Clean up sessions from previous launches that had 0 messages
+        try:
+            from db.store import cleanup_empty_sessions
+            cleanup_empty_sessions()
+        except Exception:
+            pass
         self.session_id = create_session()
         self.update_status()
         self._populate_tree()
@@ -2364,7 +2370,9 @@ def main():
             print()
             print("Usage:")
             print("  oblivion              Launch the TUI (default)")
+            print("  oblivion demo         60-second guided tour (no API key needed)")
             print("  oblivion mcp          Run as MCP server (for Claude Desktop, etc.)")
+            print("  oblivion inspect      Open MCP Inspector in browser (requires npx)")
             print("  oblivion init         Re-run the setup wizard")
             print("  oblivion --version    Print version")
             print()
@@ -2374,6 +2382,34 @@ def main():
         if cmd == "mcp":
             from mcp_server.server import main as mcp_main
             mcp_main()
+            return
+        if cmd == "inspect":
+            # Launch official MCP Inspector against our own server
+            # (opens browser UI to test all 10 tools interactively)
+            import shutil, subprocess, os as _os2
+            if not shutil.which("npx"):
+                print("ERROR: npx not found on PATH.")
+                print()
+                print("The MCP Inspector requires Node.js (which ships with npx).")
+                print("Install:")
+                print("  Linux/WSL:  sudo apt install nodejs npm")
+                print("  macOS:      brew install node")
+                print("  Windows:    https://nodejs.org/en/download")
+                print()
+                print("Then re-run: oblivion inspect")
+                return
+            print("[oblivion] Launching MCP Inspector...")
+            print("[oblivion] Your MCP server will be exposed at http://localhost:6274")
+            print("[oblivion] Browser will open automatically. Press Ctrl+C to stop.")
+            print()
+            try:
+                subprocess.run(
+                    ["npx", "-y", "@modelcontextprotocol/inspector",
+                     "oblivion", "mcp"],
+                    check=False,
+                )
+            except KeyboardInterrupt:
+                print("\n[oblivion] Inspector stopped.")
             return
         if cmd == "init":
             from agent.setup_wizard import run_wizard
