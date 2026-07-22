@@ -16,15 +16,19 @@ litellm.drop_params = True
 # ── Fallback config ─────────────────────────────────────────────────────────
 # Order: primary (whatever DEFAULT_MODEL is) → these in sequence
 FALLBACK_CHAIN = [
-    # Free OpenRouter models (cloud, no local hardware)
-    "openrouter/qwen/qwen3-coder:free",
-    "openrouter/openai/gpt-oss-120b:free",
-    "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-    # Original chain
+    # Free OpenRouter models (verified live as of v2.10.6)
+    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",  # 1M ctx, frontier
+    "openrouter/cohere/north-mini-code:free",             # coding-tuned, 256K
+    "openrouter/openai/gpt-oss-20b:free",                 # small but solid
+    "openrouter/google/gemma-4-31b-it:free",              # general 262K ctx
+    # Local Ollama Cloud
     "ollama/qwen3-coder:480b-cloud",
+    # Groq (fast + reliable)
     "groq/llama-3.3-70b-versatile",
     "groq/openai/gpt-oss-120b",
+    # Google Gemini
     "gemini/gemini-2.5-flash",
+    # Cerebras backup
     "cerebras/llama-3.3-70b",
 ]
 
@@ -51,20 +55,28 @@ def _is_retryable(err: Exception) -> bool:
 
 
 def _short_error(err: Exception) -> str:
-    """One-line human-readable error for UI display."""
+    """One-line human-readable error for UI display. Never shows stack traces."""
     msg = str(err)
-    if "503" in msg or "overloaded" in msg.lower() or "high demand" in msg.lower():
+    msg_lower = msg.lower()
+    if "not found" in msg_lower or "notfound" in msg_lower or "does not exist" in msg_lower:
+        return "model not available"
+    if "503" in msg or "overloaded" in msg_lower or "high demand" in msg_lower or "unavailable" in msg_lower:
         return "service overloaded (503)"
-    if "429" in msg or "rate limit" in msg.lower() or "quota" in msg.lower():
+    if "429" in msg or "rate limit" in msg_lower or "quota" in msg_lower or "exhausted" in msg_lower:
         return "rate limited / quota exceeded"
-    if "timeout" in msg.lower() or "timed out" in msg.lower():
+    if "timeout" in msg_lower or "timed out" in msg_lower:
         return "timeout"
-    if "connect" in msg.lower() or "network" in msg.lower():
+    if "connect" in msg_lower or "network" in msg_lower:
         return "network error"
-    if "api key" in msg.lower() or "authentication" in msg.lower():
-        return "missing/invalid API key"
-    # truncate long errors
-    return msg[:80] + ("..." if len(msg) > 80 else "")
+    if "401" in msg or "api key" in msg_lower or "authentication" in msg_lower or "unauthenticated" in msg_lower:
+        return "invalid or missing API key"
+    if "500" in msg or "502" in msg or "504" in msg or "internal server" in msg_lower:
+        return "provider server error"
+    # Truncate and strip any JSON/dict garbage
+    clean = msg.split("{")[0].split("\n")[0].strip()
+    if len(clean) > 60:
+        clean = clean[:60] + "..."
+    return clean or "unknown error"
 
 
 class LLMClient:
