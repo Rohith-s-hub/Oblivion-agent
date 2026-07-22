@@ -11,13 +11,22 @@ Add new models here. litellm handles the actual API calls based on the prefix:
 import os
 
 MODELS = {
-    "qwen-coder": {
-        "id": "ollama/qwen3-coder:480b-cloud",
+    "gemma4-cloud": {
+        "id": "ollama/gemma4:31b-cloud",
         "provider": "ollama",
         "speed": "medium",
-        "cost": "FREE",
-        "description": "Default - Qwen3 Coder 480B (Ollama Cloud)",
-        "color": "#00ff9f",
+        "cost": "FREE (Ollama Cloud)",
+        "description": "Google Gemma 4 31B via Ollama Cloud",
+        "color": "#4285f4",
+        "api_key_env": None,
+    },
+    "qwen35-local": {
+        "id": "ollama/qwen3.5:4b",
+        "provider": "ollama",
+        "speed": "fast",
+        "cost": "FREE (LOCAL - offline capable)",
+        "description": "Qwen 3.5 4B running LOCALLY on your machine (offline, private)",
+        "color": "#00d9ff",
         "api_key_env": None,
     },
     "groq-llama": {

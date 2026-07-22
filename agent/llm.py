@@ -16,20 +16,21 @@ litellm.drop_params = True
 # ── Fallback config ─────────────────────────────────────────────────────────
 # Order: primary (whatever DEFAULT_MODEL is) → these in sequence
 FALLBACK_CHAIN = [
-    # Free OpenRouter models (verified live as of v2.10.6)
-    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",  # 1M ctx, frontier
-    "openrouter/cohere/north-mini-code:free",             # coding-tuned, 256K
-    "openrouter/openai/gpt-oss-20b:free",                 # small but solid
-    "openrouter/google/gemma-4-31b-it:free",              # general 262K ctx
-    # Local Ollama Cloud
-    "ollama/qwen3-coder:480b-cloud",
-    # Groq (fast + reliable)
-    "groq/llama-3.3-70b-versatile",
-    "groq/openai/gpt-oss-120b",
-    # Google Gemini
-    "gemini/gemini-2.5-flash",
-    # Cerebras backup
-    "cerebras/llama-3.3-70b",
+    # PRIMARY: Groq - fastest + genuinely good at code
+    "groq/openai/gpt-oss-120b",              # 1. Best free coder per real-world use
+    "groq/llama-3.3-70b-versatile",          # 2. Fast generalist backup
+    # SECONDARY: Big context cloud, reliable when Groq quota hits
+    "gemini/gemini-2.5-flash",               # 3. 1M ctx
+    # CODING-SPECIALIZED
+    "openrouter/cohere/north-mini-code:free", # 4. Coding-tuned specifically
+    # LOCAL: 262K ctx, tools+thinking capable, always works offline
+    "ollama/qwen3.5:4b",                     # 5. Local Qwen 3.5 (promoted from dead last)
+    # OpenRouter free tier fallbacks
+    "openrouter/openai/gpt-oss-20b:free",    # 6. Smaller GPT-OSS
+    "openrouter/google/gemma-4-31b-it:free", # 7. General purpose (dedup, no Ollama duplicate)
+    # LAST RESORT: unreliable free tiers when everything else fails
+    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",  # 8. Rate-limited but frontier
+    "cerebras/llama-3.3-70b",                # 9. Deepest backup
 ]
 
 # How long to keep a model "exhausted" before retrying (seconds)
