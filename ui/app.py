@@ -740,12 +740,12 @@ class OblivionApp(App):
         # Wire LLM fallback notifications into the chat log
         from agent.llm import LLMClient
         def _on_fallback(msg: str):
+            """Fallback retries go to Agent Log panel, NOT chat.
+            Users don't need to see every retry attempt."""
             try:
-                log = self.query_one("#chat-log", RichLog)
-                self.call_from_thread(
-                    log.write,
-                    "[#febc2e]↻ " + msg + "[/#febc2e]",
-                )
+                scroll = self.query_one("#activity-scroll", VerticalScroll)
+                dim_msg = Static(f"[dim #3e4560]↻ {msg}[/dim #3e4560]")
+                self.call_from_thread(self._mount_watcher_item, scroll, dim_msg)
             except Exception:
                 pass
         LLMClient.on_fallback_notify = _on_fallback
@@ -1998,8 +1998,15 @@ class OblivionApp(App):
                 it.set_done(f"{len(output)} chars, {spinner_box['tokens']} tokens")
 
         async def on_thought(thought: str):
-            t = thought[:200] + "…" if len(thought) > 200 else thought
-            log.write(f"[#3e4560]◇[/#3e4560] [italic dim]{t}[/italic dim]")
+            """THOUGHTs are internal reasoning debug. Silent by default.
+            Users see ANSWERS not reasoning. Log to Agent Log as breadcrumb."""
+            try:
+                scroll = self.query_one("#activity-scroll", VerticalScroll)
+                t = thought[:120] + "…" if len(thought) > 120 else thought
+                dim_thought = Static(f"[dim #3e4560]◇ {t}[/dim #3e4560]")
+                self.call_from_thread(self._mount_watcher_item, scroll, dim_thought)
+            except Exception:
+                pass
 
         async def on_tool_start(tool_name: str, args: dict):
             item = ActivityItem(tool_name, args, "running")
