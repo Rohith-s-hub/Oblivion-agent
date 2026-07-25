@@ -132,15 +132,41 @@ When you created/moved/deleted files, format like:
   Summary: <one line>
   Next: <one short suggestion, optional>
 
-## EXAMPLE
+## EXAMPLES OF CORRECT VS WRONG (CRITICAL - STUDY THESE)
 
+===== EXAMPLE 1: LIST FILES (correct) =====
 User: list files here
 THOUGHT: Simple listing request.
 ACTION: {{{{"tool": "list_dir", "args": {{{{"path": "."}}}}}}}}
 
-[observation: FILE hello.py (245B) / DIR src/]
-THOUGHT: Have what I need.
-FINAL_ANSWER: 2 items here: hello.py (245 bytes) and src/ folder.
+OBSERVATION:
+Contents of .:
+DIR  __pycache__/
+FILE employee.sql (714B)
+
+THOUGHT: Observation shows exactly 2 items. Report them.
+FINAL_ANSWER: 2 items here: __pycache__/ (folder) and employee.sql (714 bytes).
+
+===== EXAMPLE 2: LIST FILES (WRONG - HALLUCINATION) =====
+User: list files here
+THOUGHT: Simple listing request.
+ACTION: {{{{"tool": "list_dir", "args": {{{{"path": "."}}}}}}}}
+
+OBSERVATION:
+Contents of .:
+DIR  __pycache__/
+FILE employee.sql (714B)
+
+FINAL_ANSWER: 24 items: README.md, LICENSE, .gitignore, package.json, ...
+              ^^^^^^^^^ WRONG! Observation showed only 2 items. Never add
+              files from your training memory. NEVER pattern-match to what
+              "typical" projects contain. Report EXACTLY what the observation
+              shows, nothing more.
+
+===== RULE FROM EXAMPLES =====
+If observation shows N items, your FINAL_ANSWER lists exactly N items.
+If observation is empty, tell the user "empty" or "nothing here".
+NEVER invent. NEVER pattern-match. NEVER add "helpful" extras.
 """.format(
         workspace=workspace,
         memory_block=memory_block,

@@ -8,20 +8,30 @@ load_dotenv()
 WORKSPACE = Path(os.getenv("WORKSPACE_DIR", ".")).resolve()
 
 
+def _current_workspace() -> Path:
+    """Re-read WORKSPACE_DIR on every call.
+
+    CRITICAL: the module-level WORKSPACE above is frozen at import time,
+    which happens BEFORE config.env is loaded in some code paths.
+    Always call this instead of using the module constant directly."""
+    return Path(os.getenv("WORKSPACE_DIR", ".")).expanduser().resolve()
+
+
 class _PathError(Exception):
     """Raised when a path violates workspace boundary."""
     pass
 
 
 def _safe_path(path: str) -> Path:
-    """Resolve a path strictly inside WORKSPACE.
+    """Resolve a path strictly inside _current_workspace().
 
     Refuses:
       - any path segment equal to '..'
-      - absolute paths that resolve outside WORKSPACE
-      - paths that resolve outside WORKSPACE via symlinks
-    Always returns a Path INSIDE WORKSPACE, or raises _PathError.
+      - absolute paths that resolve outside _current_workspace()
+      - paths that resolve outside _current_workspace() via symlinks
+    Always returns a Path INSIDE _current_workspace(), or raises _PathError.
     """
+    workspace = _current_workspace()
     if not isinstance(path, str) or not path.strip():
         raise _PathError("Empty path provided.")
 
@@ -31,13 +41,13 @@ def _safe_path(path: str) -> Path:
     if ".." in parts:
         raise _PathError(
             f"Path '{raw}' contains '..' which would escape the workspace "
-            f"'{WORKSPACE}'. Use a path relative to the workspace root "
+            f"'{workspace}'. Use a path relative to the workspace root "
             f"(e.g., 'index.html' or 'src/main.py')."
         )
 
-    # 2) Resolve relative to WORKSPACE if not absolute
+    # 2) Resolve relative to workspace if not absolute
     p_in = Path(raw).expanduser()
-    candidate = p_in if p_in.is_absolute() else (WORKSPACE / p_in)
+    candidate = p_in if p_in.is_absolute() else (workspace / p_in)
 
     # 3) Resolve fully (follows symlinks) and verify containment
     try:
@@ -46,11 +56,11 @@ def _safe_path(path: str) -> Path:
         raise _PathError(f"Cannot resolve path '{raw}': {e}")
 
     try:
-        resolved.relative_to(WORKSPACE)
+        resolved.relative_to(workspace)
     except ValueError:
         raise _PathError(
             f"Path '{raw}' resolves to '{resolved}' which is outside the "
-            f"workspace '{WORKSPACE}'. All file operations must stay inside "
+            f"workspace '{workspace}'. All file operations must stay inside "
             f"the workspace. Use a path like 'filename.ext' or 'subdir/file.ext'."
         )
 
