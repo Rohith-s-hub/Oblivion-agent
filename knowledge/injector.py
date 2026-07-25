@@ -12,9 +12,9 @@ from typing import Set, Optional, List
 from knowledge.detector import detect_tech_stack, detect_from_request, describe_stack
 
 PACKS_DIR = Path(__file__).parent / "packs"
-MAX_PACKS = 2  # only top-2 most relevant
-MAX_PACK_CHARS = 6000  # ~1500 tokens per pack
-MAX_TOTAL_CHARS = 12000  # ~3000 tokens of knowledge MAX
+MAX_PACKS = 1  # was 2; cut to reduce prompt bloat  # only top-2 most relevant
+MAX_PACK_CHARS = 2500  # was 6000; forced summary  # ~1500 tokens per pack
+MAX_TOTAL_CHARS = 3000  # was 12000; cap knowledge injection  # ~3000 tokens of knowledge MAX
 
 PACK_PRIORITY = [
     "debugging",
@@ -79,8 +79,9 @@ def build_knowledge_block(
     user_tags = detect_from_request(user_message)
     workspace_tags = detect_tech_stack(workspace)
 
-    # Pinned: anything the user explicitly mentioned + always-on packs
-    pinned = (user_tags | {"debugging"}) & available
+    # Pinned: ONLY what user explicitly mentioned (no always-on packs)
+    # (Removed 'debugging' from always-on — it was adding 5k tokens per request)
+    pinned = user_tags & available
 
     # Filler: workspace inference, used to fill remaining slots
     filler = (workspace_tags - user_tags) & available

@@ -22,7 +22,10 @@ def detect_tech_stack(workspace: str = None) -> Set[str]:
     The 'debugging' and 'deployment' tags are always included.
     """
     ws = Path(workspace or os.getenv("WORKSPACE_DIR", ".")).expanduser().resolve()
-    tags: Set[str] = {"debugging", "deployment"}
+    # Empty by default — only add tags for what's actually detected in workspace.
+    # (Previously always included 'debugging' + 'deployment' which bloated the
+    # system prompt by ~700 tokens per request even when user asked "list files".)
+    tags: Set[str] = set()
 
     # ── Node.js / JS frameworks ────────────────────────────────────────────
     pkg_json = ws / "package.json"
