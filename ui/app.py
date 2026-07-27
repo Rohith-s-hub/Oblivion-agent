@@ -151,6 +151,12 @@ SLASH_COMMANDS = SLASH_COMMANDS[:0] + [
     ("/load",         "Resume a saved session"),
     ("/sessions",     "List all saved sessions"),
     ("/stats",        "Show conversation stats"),
+    ("/trust",        "Show/manage trust groups (edit, all-mutate, workspace, server)"),
+    ("/trust edit",   "Pre-approve write_file, edit_file, insert_after this session"),
+    ("/trust reset",  "Clear trust list (all mutations prompt again)"),
+    ("/auto",         "Toggle AUTO mode (mutations auto-approve, destructive still prompt)"),
+    ("/auto --persist", "AUTO mode saved to config.env across restarts"),
+    ("/switch",       "Switch to 8085 Microprocessor Simulator"),
     ("/quit",         "Exit Oblivion"),
     ("/update",       "Check PyPI for newer Oblivion version"),
     ("/update install", "Upgrade to latest Oblivion via pip"),
@@ -662,10 +668,18 @@ class OblivionApp(App):
             tok_str = "tok:" + str(tokens["total"])
         except Exception:
             tok_str = "tok:0"
+        # AUTO mode indicator (yellow, impossible to miss)
+        auto_prefix = ""
+        try:
+            st = self._runtime_state()
+            if st.get("auto_mode"):
+                auto_prefix = "[bold #febc2e][AUTO][/bold #febc2e] "
+        except Exception:
+            pass
         if self.agent_busy:
-            status = "thinking"
+            status = auto_prefix + "thinking"
         else:
-            status = "ready"
+            status = auto_prefix + "ready"
         return (
             " " + status
             + "  |  " + model_name
@@ -727,12 +741,12 @@ class OblivionApp(App):
         # Wire LLM fallback notifications into the chat log
         from agent.llm import LLMClient
         def _on_fallback(msg: str):
+            """Fallback retries go to Agent Log panel, NOT chat.
+            Users don't need to see every retry attempt."""
             try:
-                log = self.query_one("#chat-log", RichLog)
-                self.call_from_thread(
-                    log.write,
-                    "[#febc2e]↻ " + msg + "[/#febc2e]",
-                )
+                scroll = self.query_one("#activity-scroll", VerticalScroll)
+                dim_msg = Static(f"[dim #3e4560]↻ {msg}[/dim #3e4560]")
+                self.call_from_thread(self._mount_watcher_item, scroll, dim_msg)
             except Exception:
                 pass
         LLMClient.on_fallback_notify = _on_fallback
@@ -1727,6 +1741,82 @@ class OblivionApp(App):
             log.write("[#febc2e]Usage: /update [check|install|changelog][/#febc2e]")
             return True
 
+        if command == "/trust":
+            # /trust             -> show current trust state
+            # /trust edit        -> pre-approve edit_file/write_file/insert_after
+            # /trust all-mutate  -> pre-approve every mutate-tier tool
+            # /trust workspace   -> pre-approve create_dir/new_workspace
+            # /trust server      -> pre-approve start_server/stop_server
+            # /trust reset       -> clear trusted set
+            from agent.permissions import expand_trust_group, TRUST_GROUPS, TOOL_TIERS
+            state = self._runtime_state() if hasattr(self, "_runtime_state") else {}
+            trusted = state.get("trusted_tools", set())
+            arg_stripped = arg.strip()
+
+            if arg_stripped == "" or arg_stripped == "show":
+                if trusted:
+                    lines = ["[bold #7b8cde]Currently trusted (bypass approval):[/bold #7b8cde]"]
+                    for t in sorted(trusted):
+                        lines.append(f"  \u2022 {t}")
+                else:
+                    lines = ["[dim]No tools trusted this session.[/dim]"]
+                lines.append("")
+                lines.append("[dim]Groups: " + ", ".join(sorted(TRUST_GROUPS.keys())) + "[/dim]")
+                lines.append("[dim]Usage: /trust <group>  |  /trust reset[/dim]")
+                log.write(Panel("\n".join(lines), title="[#3e4560]TRUST[/#3e4560]", border_style="#3e4560"))
+                return True
+
+            if arg_stripped == "reset":
+                self._set_trusted(set())
+                log.write("[#7b8cde]Trust list cleared. All mutations will prompt again.[/#7b8cde]")
+                return True
+
+            group_tools = expand_trust_group(arg_stripped)
+            if not group_tools:
+                log.write(f"[#febc2e]Unknown trust group: {arg_stripped}[/#febc2e]  Available: " + ", ".join(sorted(TRUST_GROUPS.keys())))
+                return True
+
+            self._set_trusted(trusted | group_tools)
+            log.write(f"[#7b8cde]\u2713 Trusted {len(group_tools)} tools for this session:[/#7b8cde] " + ", ".join(sorted(group_tools)))
+            log.write("[dim]These will auto-approve. Destructive commands still prompt.[/dim]")
+            return True
+
+        if command == "/auto":
+            # /auto            -> toggle auto-mode (session only)
+            # /auto --persist  -> save to config.env
+            arg_stripped = arg.strip()
+            state = self._runtime_state() if hasattr(self, "_runtime_state") else {}
+            currently = state.get("auto_mode", False)
+            new_state = not currently
+
+            self._set_auto(new_state)
+
+            if new_state:
+                log.write(Panel(
+                    "[bold #febc2e]AUTO MODE ON[/bold #febc2e]\n\n"
+                    "Mutations (write, edit, create) will auto-approve.\n"
+                    "[bold #ff006e]Destructive commands (rm -rf, dd, git push --force) STILL prompt.[/bold #ff006e]\n\n"
+                    "[dim]Type /auto again to turn off.[/dim]",
+                    title="[#febc2e]AUTO[/#febc2e]",
+                    border_style="#febc2e",
+                ))
+                if arg_stripped == "--persist":
+                    self._update_env("OBLIVION_AUTO_MODE", "true")
+                    log.write("[dim]Persisted to config.env - remembered across restarts.[/dim]")
+            else:
+                log.write("[#7b8cde]AUTO mode OFF. Approval prompts restored.[/#7b8cde]")
+                if arg_stripped == "--persist" or "OBLIVION_AUTO_MODE" in (self._read_config() if hasattr(self, "_read_config") else ""):
+                    self._update_env("OBLIVION_AUTO_MODE", "false")
+            self.update_status()
+            return True
+
+        if command == "/switch":
+            from ui.sim_screen import SimScreen
+            log.write("[#7b8cde]Switching to 8085 Simulator mode...[/#7b8cde]")
+            log.write("[dim]Press ESC or click Back to return to Oblivion.[/dim]")
+            self.push_screen(SimScreen())
+            return True
+
         if command == "/quit":
             self._stop_watcher()
             if self.voice_stop_event is not None:
@@ -1876,6 +1966,16 @@ class OblivionApp(App):
         if any(kw in lower for kw in complex_keywords):
             max_iter = max(max_iter, 50)  # complex tasks get 50 iterations
         runtime = AgentRuntime(self.agent, self.session_id, max_iterations=max_iter)
+        # Sync app-level trust/auto state into this runtime instance
+        self._last_runtime = runtime
+        app_state = getattr(self, "_app_session_state", None)
+        if app_state:
+            runtime.session_state["auto_mode"] = app_state.get("auto_mode", False)
+            runtime.session_state["trusted_tools"] = set(app_state.get("trusted_tools", set()))
+        # Load persisted auto-mode from config.env if present
+        import os as _os_tier
+        if _os_tier.getenv("OBLIVION_AUTO_MODE", "").lower() == "true":
+            runtime.session_state["auto_mode"] = True
 
         # ── Callbacks ────────────────────────────────────────────────────────
         spinner_box = {"item": None, "tokens": 0}
@@ -1906,8 +2006,15 @@ class OblivionApp(App):
                 it.set_done(f"{len(output)} chars, {spinner_box['tokens']} tokens")
 
         async def on_thought(thought: str):
-            t = thought[:200] + "…" if len(thought) > 200 else thought
-            log.write(f"[#3e4560]◇[/#3e4560] [italic dim]{t}[/italic dim]")
+            """THOUGHTs are internal reasoning debug. Silent by default.
+            Users see ANSWERS not reasoning. Log to Agent Log as breadcrumb."""
+            try:
+                scroll = self.query_one("#activity-scroll", VerticalScroll)
+                t = thought[:120] + "…" if len(thought) > 120 else thought
+                dim_thought = Static(f"[dim #3e4560]◇ {t}[/dim #3e4560]")
+                self.call_from_thread(self._mount_watcher_item, scroll, dim_thought)
+            except Exception:
+                pass
 
         async def on_tool_start(tool_name: str, args: dict):
             item = ActivityItem(tool_name, args, "running")

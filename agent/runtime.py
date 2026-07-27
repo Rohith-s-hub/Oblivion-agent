@@ -29,6 +29,7 @@ from typing import Any, Awaitable, Callable, Optional
 from agent.parser import parse_llm_output, ToolCall, FinalAnswer, is_garbage_output
 from agent.brain import compress_conversation, needs_compression, summarize_via_llm
 from tools.registry import dispatch
+from agent.permissions import needs_approval as tier_needs_approval, classify_tool, network_disclosure
 
 
 def _estimate_tokens(messages: list) -> int:
@@ -145,6 +146,9 @@ class AgentRuntime:
         self.agent = agent
         self.session_id = session_id
         self.max_iterations = max_iterations
+
+        # Permission tiers (v3)
+        self.session_state = {"auto_mode": False, "trusted_tools": set()}
 
     async def run_async(
         self,

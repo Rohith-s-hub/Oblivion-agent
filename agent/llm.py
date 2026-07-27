@@ -21,7 +21,6 @@ FALLBACK_CHAIN = [
     # SECONDARY: Gemini 2.5 Flash - 1M context, reliable
     "gemini/gemini-2.5-flash",
     # TERTIARY: Coding-specialized
-    "openrouter/cohere/north-mini-code:free",
     # QUATERNARY: Groq gpt-oss-120b - better coder BUT 8k TPM limits Oblivion prompts
     "groq/openai/gpt-oss-120b",
     # LOCAL: 262K ctx, tools + thinking, works OFFLINE
@@ -35,7 +34,7 @@ FALLBACK_CHAIN = [
 ]
 
 # How long to keep a model "exhausted" before retrying (seconds)
-EXHAUSTION_COOLDOWN = 300  # 5 minutes
+EXHAUSTION_COOLDOWN = 1800  # 30 minutes (was 5, prevents fallback flapping)
 
 # Errors that trigger fallback (case-insensitive substring match)
 RETRYABLE_ERROR_HINTS = [

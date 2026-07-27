@@ -104,16 +104,6 @@ MODELS = {
         "api_key_env": "OPENROUTER_API_KEY",
         "context_window": 1_000_000,
     },
-    "cohere-code": {
-        "id": "openrouter/cohere/north-mini-code:free",
-        "provider": "openrouter",
-        "speed": "fast",
-        "cost": "FREE (OpenRouter)",
-        "description": "Cohere North Mini Code - coding-tuned, 256K ctx, FREE",
-        "color": "#39594d",
-        "api_key_env": "OPENROUTER_API_KEY",
-        "context_window": 256_000,
-    },
     "gpt-oss-or": {
         "id": "openrouter/openai/gpt-oss-20b:free",
         "provider": "openrouter",
