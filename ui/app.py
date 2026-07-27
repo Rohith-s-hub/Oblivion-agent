@@ -156,6 +156,7 @@ SLASH_COMMANDS = SLASH_COMMANDS[:0] + [
     ("/trust reset",  "Clear trust list (all mutations prompt again)"),
     ("/auto",         "Toggle AUTO mode (mutations auto-approve, destructive still prompt)"),
     ("/auto --persist", "AUTO mode saved to config.env across restarts"),
+    ("/switch",       "Switch to 8085 Microprocessor Simulator"),
     ("/quit",         "Exit Oblivion"),
     ("/update",       "Check PyPI for newer Oblivion version"),
     ("/update install", "Upgrade to latest Oblivion via pip"),
@@ -1807,6 +1808,13 @@ class OblivionApp(App):
                 if arg_stripped == "--persist" or "OBLIVION_AUTO_MODE" in (self._read_config() if hasattr(self, "_read_config") else ""):
                     self._update_env("OBLIVION_AUTO_MODE", "false")
             self.update_status()
+            return True
+
+        if command == "/switch":
+            from ui.sim_screen import SimScreen
+            log.write("[#7b8cde]Switching to 8085 Simulator mode...[/#7b8cde]")
+            log.write("[dim]Press ESC or click Back to return to Oblivion.[/dim]")
+            self.push_screen(SimScreen())
             return True
 
         if command == "/quit":
