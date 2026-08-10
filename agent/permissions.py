@@ -49,6 +49,9 @@ TOOL_TIERS = {
     # Git mutate tools
     "git_commit": "mutate",
     "git_undo":   "mutate",
+    # Batch edit - mutate tier (single approval for multiple files)
+    "batch_edit":  "mutate",
+    "batch_apply": "mutate",
 
     # DESTRUCTIVE TIER (1 tool - dynamic classification)
     "run_bash": "destructive",  # subclassified by command content

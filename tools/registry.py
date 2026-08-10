@@ -4,6 +4,8 @@ from tools.bash import run_bash, start_server, list_servers, stop_server
 from tools.edit_file import edit_file, insert_after
 from tools.search_code import search_code
 from tools.symbol_tools import find_symbol, list_symbols, find_callers, project_map
+from tools.batch_edit import batch_edit, batch_apply
+from tools.batch_edit import batch_edit, batch_apply
 from tools.git_tools import (
     git_status, git_diff, git_log,
     git_commit, git_branch, git_undo,
@@ -241,6 +243,50 @@ TOOL_SCHEMAS = [
     },
 
     {
+        "name": "batch_edit",
+        "description": (
+            "Edit MULTIPLE files at once with a single approval. "
+            "Use this instead of multiple write_file/edit_file calls "
+            "when making related changes across files. "
+            "Shows unified preview of ALL changes before applying. "
+            "Edits are applied atomically — all or nothing. "
+            "Each edit needs: path + (old_text+new_text) OR path + content."
+        ),
+        "parameters": {
+            "edits": {
+                "type": "array",
+                "description": (
+                    "List of edits. Each: "
+                    "{path, old_text, new_text} for surgical edit OR "
+                    "{path, content} for full file write/create"
+                ),
+                "required": True,
+            },
+        },
+    },
+    {
+        "name": "batch_edit",
+        "description": (
+            "Edit MULTIPLE files at once with a single approval. "
+            "Use this instead of multiple write_file/edit_file calls "
+            "when making related changes across files. "
+            "Shows unified preview of ALL changes before applying. "
+            "Edits are applied atomically — all or nothing. "
+            "Each edit needs: path + (old_text+new_text) OR path + content."
+        ),
+        "parameters": {
+            "edits": {
+                "type": "array",
+                "description": (
+                    "List of edits. Each: "
+                    "{path, old_text, new_text} for surgical edit OR "
+                    "{path, content} for full file write/create"
+                ),
+                "required": True,
+            },
+        },
+    },
+    {
         "name": "git_status",
         "description": (
             "Show current git status: branch, staged files, unstaged changes, "
@@ -337,6 +383,9 @@ TOOL_FUNCTIONS = {
     "list_servers":  list_servers,
     "stop_server":   stop_server,
     "finish":        _finish,   # was missing - runtime handles it first
+    # Batch edit
+    "batch_edit":    batch_edit,
+    "batch_apply":   batch_apply,
     # Git tools
     "git_status":    git_status,
     "git_diff":      git_diff,

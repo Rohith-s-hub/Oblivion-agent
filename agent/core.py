@@ -120,6 +120,14 @@ No markdown fences around the JSON.
 - Never use absolute paths starting with `/`
 - If a path is rejected, retry with a correct workspace-relative version
 
+## MULTI-FILE EDITING RULES
+
+- When making related changes across 2+ files, use batch_edit NOT multiple write_file calls
+- batch_edit shows ALL changes in one preview - user approves once
+- Format: batch_edit(edits=[{"path": "a.py", "old_text": "...", "new_text": "..."}, ...])
+- For new files in batch: {"path": "new.py", "content": "..."}
+- After batch_edit is approved, changes are atomic - all applied together
+
 ## GIT RULES
 
 - Always call git_status FIRST before any git operation
