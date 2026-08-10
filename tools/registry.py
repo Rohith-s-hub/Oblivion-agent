@@ -4,6 +4,10 @@ from tools.bash import run_bash, start_server, list_servers, stop_server
 from tools.edit_file import edit_file, insert_after
 from tools.search_code import search_code
 from tools.symbol_tools import find_symbol, list_symbols, find_callers, project_map
+from tools.git_tools import (
+    git_status, git_diff, git_log,
+    git_commit, git_branch, git_undo,
+)
 from agent.brain import remember as _remember, recall as _recall, verify_code as _verify_code
 
 
@@ -235,6 +239,66 @@ TOOL_SCHEMAS = [
             "max_files": {"type": "integer", "description": "Max files in plan (default 10)", "required": False},
         },
     },
+
+    {
+        "name": "git_status",
+        "description": (
+            "Show current git status: branch, staged files, unstaged changes, "
+            "untracked files, and last commit. "
+            "Call this FIRST before any git operation."
+        ),
+        "parameters": {},
+    },
+    {
+        "name": "git_diff",
+        "description": (
+            "Show git diff of changes. Use before committing to review. "
+            "path: specific file (optional). staged: True for staged diff."
+        ),
+        "parameters": {
+            "path": {"type": "string", "description": "File to diff (optional)", "required": False},
+            "staged": {"type": "boolean", "description": "Show staged diff (default False)", "required": False},
+        },
+    },
+    {
+        "name": "git_log",
+        "description": "Show recent git commits with hash, time, author, message.",
+        "parameters": {
+            "n": {"type": "integer", "description": "Number of commits (default 10, max 50)", "required": False},
+            "path": {"type": "string", "description": "Filter to commits touching this file", "required": False},
+        },
+    },
+    {
+        "name": "git_commit",
+        "description": (
+            "Stage modified files and create a git commit. "
+            "add_all=True stages all tracked modified files first. "
+            "Does NOT push to remote."
+        ),
+        "parameters": {
+            "message": {"type": "string", "description": "Commit message", "required": True},
+            "add_all": {"type": "boolean", "description": "Stage all modified files first (git add -u)", "required": False},
+        },
+    },
+    {
+        "name": "git_branch",
+        "description": "Manage git branches: list, create, switch, or delete.",
+        "parameters": {
+            "action": {"type": "string", "description": "list | create | switch | delete", "required": True},
+            "name": {"type": "string", "description": "Branch name (required for create/switch/delete)", "required": False},
+        },
+    },
+    {
+        "name": "git_undo",
+        "description": (
+            "Safely undo the last commit. "
+            "soft=keeps changes staged. mixed=unstages but keeps files. "
+            "NEVER does hard reset or force push."
+        ),
+        "parameters": {
+            "mode": {"type": "string", "description": "soft (default) or mixed", "required": False},
+        },
+    },
     {
         "name": "finish",
         "description": "Signal task is complete.",
@@ -273,6 +337,13 @@ TOOL_FUNCTIONS = {
     "list_servers":  list_servers,
     "stop_server":   stop_server,
     "finish":        _finish,   # was missing - runtime handles it first
+    # Git tools
+    "git_status":    git_status,
+    "git_diff":      git_diff,
+    "git_log":       git_log,
+    "git_commit":    git_commit,
+    "git_branch":    git_branch,
+    "git_undo":      git_undo,
                                 # but dispatch fallback now works too
 }
 

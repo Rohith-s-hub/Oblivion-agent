@@ -17,7 +17,7 @@ from typing import Optional
 # ================== TIER ASSIGNMENTS ==================
 
 TOOL_TIERS = {
-    # READ TIER (13 tools) - auto-execute, silent
+    # READ TIER - auto-execute, silent
     "read_file": "read",
     "list_dir": "read",
     "grep_files": "read",
@@ -31,8 +31,13 @@ TOOL_TIERS = {
     "verify_code": "read",
     "list_servers": "read",
     "plan_task": "read",
+    # Git read tools
+    "git_status": "read",
+    "git_diff":   "read",
+    "git_log":    "read",
+    "git_branch": "read",
 
-    # MUTATE TIER (9 tools) - approval required, bypassable via /trust or /auto
+    # MUTATE TIER - approval required, bypassable via /trust or /auto
     "write_file": "mutate",
     "edit_file": "mutate",
     "insert_after": "mutate",
@@ -41,6 +46,9 @@ TOOL_TIERS = {
     "remember": "mutate",
     "start_server": "mutate",
     "stop_server": "mutate",
+    # Git mutate tools
+    "git_commit": "mutate",
+    "git_undo":   "mutate",
 
     # DESTRUCTIVE TIER (1 tool - dynamic classification)
     "run_bash": "destructive",  # subclassified by command content

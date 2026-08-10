@@ -120,6 +120,15 @@ No markdown fences around the JSON.
 - Never use absolute paths starting with `/`
 - If a path is rejected, retry with a correct workspace-relative version
 
+## GIT RULES
+
+- Always call git_status FIRST before any git operation
+- Never use run_bash for git push --force (blocked as destructive)
+- Use git_commit for committing (safer than run_bash git commit)
+- Use git_diff before committing to confirm changes are correct
+- Use git_undo (soft) to undo a bad commit safely
+- Never commit API keys, .env files, or secrets
+
 ## AVAILABLE TOOLS
 
 {{tool_list}}
