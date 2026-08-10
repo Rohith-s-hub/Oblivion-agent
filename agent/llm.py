@@ -100,6 +100,15 @@ class LLMClient:
         """Read model fresh each call - allows mid-session switching."""
         return os.getenv("DEFAULT_MODEL", "ollama/qwen3-coder:480b-cloud")
 
+    @property
+    def rate_limit_delay(self) -> float:
+        """Rate limit delay for current model (seconds between calls)."""
+        try:
+            from agent.models import get_rate_delay
+            return get_rate_delay(self.model)
+        except Exception:
+            return 1.5  # safe default
+
     # ── Exhaustion tracking ─────────────────────────────────────────────────
     @classmethod
     def _mark_exhausted(cls, model: str) -> None:

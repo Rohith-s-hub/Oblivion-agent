@@ -30,6 +30,7 @@ from agent.parser import parse_llm_output, ToolCall, FinalAnswer, is_garbage_out
 from agent.brain import compress_conversation, needs_compression, summarize_via_llm
 from tools.registry import dispatch
 from agent.permissions import needs_approval as tier_needs_approval, classify_tool
+from agent.models import get_context_limit, get_rate_delay
 
 
 def _estimate_tokens(messages: list) -> int:
@@ -179,9 +180,12 @@ class AgentRuntime:
                 except Exception:
                     pass
 
-            # AUTO-SUMMARIZATION: if conversation is getting big, compress middle
+            # AUTO-SUMMARIZATION: compress based on model actual context window
             est_tokens = _estimate_tokens(self.agent.conversation)
-            if est_tokens > 6000 and len(self.agent.conversation) > 6:
+            _ctx_limit = get_context_limit(self.agent.llm.model)
+            # Compress at 60% of model context limit (leaves room for system prompt + response)
+            _compress_at = max(6_000, int(_ctx_limit * 0.60))
+            if est_tokens > _compress_at and len(self.agent.conversation) > 6:
                 original_count = len(self.agent.conversation)
                 self.agent.conversation = _summarize_conversation(self.agent.conversation, keep_recent=4)
                 new_count = len(self.agent.conversation)
@@ -227,17 +231,11 @@ class AgentRuntime:
                 {"role": "system", "content": self.agent.system_prompt}
             ] + self.agent.conversation
 
-            # RATE LIMIT GUARD: model-aware delay to stay under free-tier RPM limits
-            # Gemini free: 10 req/min (~6s delay). Groq: 500 req/min (no delay needed).
+            # RATE LIMIT GUARD: delay from model registry (per-model tuned values)
             _model_id = self.agent.llm.model
-            if "gemini" in _model_id:
-                time.sleep(6.0)   # Gemini free: 10 req/min
-            elif "groq" in _model_id:
-                time.sleep(0.5)   # Groq: very high limits
-            elif "ollama" in _model_id:
-                time.sleep(0.0)   # Local: no rate limit
-            else:
-                time.sleep(1.5)   # OpenRouter/others: conservative
+            _delay = get_rate_delay(_model_id)
+            if _delay > 0:
+                time.sleep(_delay)
 
             # Stream LLM output to UI via callback
             llm_output = await self._stream_llm(messages, cb)
