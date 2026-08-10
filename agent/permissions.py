@@ -36,6 +36,9 @@ TOOL_TIERS = {
     "git_diff":   "read",
     "git_log":    "read",
     "git_branch": "read",
+    # Test runner - read tier (runs tests, never modifies files)
+    "run_tests":  "read",
+    "test_file":  "read",
 
     # MUTATE TIER - approval required, bypassable via /trust or /auto
     "write_file": "mutate",

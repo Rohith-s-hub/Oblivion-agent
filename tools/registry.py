@@ -5,7 +5,9 @@ from tools.edit_file import edit_file, insert_after
 from tools.search_code import search_code
 from tools.symbol_tools import find_symbol, list_symbols, find_callers, project_map
 from tools.batch_edit import batch_edit, batch_apply
+from tools.test_runner import run_tests, test_file, detect_test_framework
 from tools.batch_edit import batch_edit, batch_apply
+from tools.test_runner import run_tests, test_file, detect_test_framework
 from tools.git_tools import (
     git_status, git_diff, git_log,
     git_commit, git_branch, git_undo,
@@ -287,6 +289,30 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "run_tests",
+        "description": (
+            "Run the project test suite and get structured results. "
+            "Auto-detects pytest/jest/vitest/npm/go/cargo. "
+            "Returns pass/fail summary + structured failure details. "
+            "Call this after fixing code to verify fixes work. "
+            "Use /fix workflow: run_tests → fix failures → run_tests again."
+        ),
+        "parameters": {
+            "path": {"type": "string", "description": "Specific test file or dir (empty = all)", "required": False},
+            "framework": {"type": "string", "description": "auto|pytest|jest|vitest|npm (default auto)", "required": False},
+        },
+    },
+    {
+        "name": "test_file",
+        "description": (
+            "Run tests in ONE specific file only. "
+            "Faster than full suite when fixing a single file."
+        ),
+        "parameters": {
+            "path": {"type": "string", "description": "Test file path", "required": True},
+        },
+    },
+    {
         "name": "git_status",
         "description": (
             "Show current git status: branch, staged files, unstaged changes, "
@@ -386,6 +412,9 @@ TOOL_FUNCTIONS = {
     # Batch edit
     "batch_edit":    batch_edit,
     "batch_apply":   batch_apply,
+    # Test runner
+    "run_tests":     run_tests,
+    "test_file":     test_file,
     # Git tools
     "git_status":    git_status,
     "git_diff":      git_diff,

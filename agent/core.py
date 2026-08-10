@@ -120,6 +120,23 @@ No markdown fences around the JSON.
 - Never use absolute paths starting with `/`
 - If a path is rejected, retry with a correct workspace-relative version
 
+## TEST-DRIVEN WORKFLOW (/fix mode)
+
+When user says /fix or asks to fix failing tests:
+1. Call run_tests to get current failures
+2. Read each failing test file with read_file
+3. Read the source file being tested with read_file
+4. Fix the issue using edit_file or batch_edit
+5. Call run_tests again to verify fix
+6. Repeat until all tests pass or budget reached
+7. FINAL_ANSWER with summary of what was fixed
+
+Rules:
+- Fix ONE failure at a time, then re-run tests
+- Never guess - always read the file first
+- If test itself is wrong, say so before changing it
+- Use test_file for faster feedback on single file fixes
+
 ## MULTI-FILE EDITING RULES
 
 - When making related changes across 2+ files, use batch_edit NOT multiple write_file calls
