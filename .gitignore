@@ -51,3 +51,43 @@ q
 # Archived old env files - NEVER commit
 .env.ARCHIVED-*
 .env.archived-*
+
+# === Added by cleanup script ===
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.eggs/
+
+# Backup files (use git history instead)
+*.bak
+*.bak-*
+*.backup
+*.before_*
+*.pre-*
+*.bak-complex
+*.bak-prefix
+*.bak-workspace
+*.v2_backup
+*.cyberpunk_backup
+
+# Runtime files (generated per-session)
+MEMORY.md
+
+# Binary/build artifacts in bin/
+bin/arduino-cli
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
