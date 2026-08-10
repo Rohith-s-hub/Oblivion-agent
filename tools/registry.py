@@ -6,8 +6,10 @@ from tools.search_code import search_code
 from tools.symbol_tools import find_symbol, list_symbols, find_callers, project_map
 from tools.batch_edit import batch_edit, batch_apply
 from tools.test_runner import run_tests, test_file, detect_test_framework
+from tools.web_search import web_search, fetch_page, search_stackoverflow, lookup_package
 from tools.batch_edit import batch_edit, batch_apply
 from tools.test_runner import run_tests, test_file, detect_test_framework
+from tools.web_search import web_search, fetch_page, search_stackoverflow, lookup_package
 from tools.git_tools import (
     git_status, git_diff, git_log,
     git_commit, git_branch, git_undo,
@@ -289,6 +291,55 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "web_search",
+        "description": (
+            "Search the web using DuckDuckGo. Free, no API key needed. "
+            "Use when user asks about: latest docs, current versions, "
+            "recent releases, error messages, anything beyond training data. "
+            "Returns titles + URLs + snippets. Use fetch_page to read full content."
+        ),
+        "parameters": {
+            "query": {"type": "string", "description": "Search query", "required": True},
+            "n_results": {"type": "integer", "description": "Number of results (default 5, max 10)", "required": False},
+        },
+    },
+    {
+        "name": "fetch_page",
+        "description": (
+            "Fetch and read a web page as clean text. "
+            "Use after web_search to read full documentation, "
+            "Stack Overflow answers, GitHub READMEs, changelogs."
+        ),
+        "parameters": {
+            "url": {"type": "string", "description": "URL to fetch", "required": True},
+            "max_chars": {"type": "integer", "description": "Max chars to return (default 4000)", "required": False},
+        },
+    },
+    {
+        "name": "search_stackoverflow",
+        "description": (
+            "Search Stack Overflow for coding answers. "
+            "Best for: error messages, how-to questions, library usage. "
+            "Returns questions with answer previews. No API key needed."
+        ),
+        "parameters": {
+            "query": {"type": "string", "description": "Coding question or error message", "required": True},
+            "n_results": {"type": "integer", "description": "Number of results (default 3)", "required": False},
+        },
+    },
+    {
+        "name": "lookup_package",
+        "description": (
+            "Look up a package on PyPI or npm. "
+            "Returns latest version, description, install command. "
+            "Auto-detects Python vs JS from workspace."
+        ),
+        "parameters": {
+            "package": {"type": "string", "description": "Package name (e.g. fastapi, react)", "required": True},
+            "registry": {"type": "string", "description": "pypi | npm | auto (default auto)", "required": False},
+        },
+    },
+    {
         "name": "run_tests",
         "description": (
             "Run the project test suite and get structured results. "
@@ -412,6 +463,11 @@ TOOL_FUNCTIONS = {
     # Batch edit
     "batch_edit":    batch_edit,
     "batch_apply":   batch_apply,
+    # Web search
+    "web_search":          web_search,
+    "fetch_page":          fetch_page,
+    "search_stackoverflow": search_stackoverflow,
+    "lookup_package":      lookup_package,
     # Test runner
     "run_tests":     run_tests,
     "test_file":     test_file,

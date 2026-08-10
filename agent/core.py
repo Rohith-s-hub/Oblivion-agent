@@ -120,6 +120,15 @@ No markdown fences around the JSON.
 - Never use absolute paths starting with `/`
 - If a path is rejected, retry with a correct workspace-relative version
 
+## WEB SEARCH RULES
+
+- Use web_search when user asks about latest versions, recent docs, or errors
+- Use lookup_package to get exact latest version before adding to requirements
+- Use search_stackoverflow for error messages you have not seen before
+- Use fetch_page to read full docs after web_search gives you the URL
+- Always cite the URL when using web content in your answer
+- Never make up package versions - always lookup_package to confirm
+
 ## TEST-DRIVEN WORKFLOW (/fix mode)
 
 When user says /fix or asks to fix failing tests:

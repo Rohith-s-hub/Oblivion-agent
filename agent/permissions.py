@@ -36,6 +36,11 @@ TOOL_TIERS = {
     "git_diff":   "read",
     "git_log":    "read",
     "git_branch": "read",
+    # Web search - read tier (fetches public web content)
+    "web_search":           "read",
+    "fetch_page":           "read",
+    "search_stackoverflow": "read",
+    "lookup_package":       "read",
     # Test runner - read tier (runs tests, never modifies files)
     "run_tests":  "read",
     "test_file":  "read",
