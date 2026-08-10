@@ -1,5 +1,6 @@
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass
 
 
@@ -58,9 +59,11 @@ def extract_json_object(text: str, start: int) -> str | None:
 
 def clean_thought(thought: str) -> str:
     """Remove leaked system prompt fragments from thought text."""
-    import re
-    # Strip anything that looks like quoted system prompt
-    thought = re.sub(r'^["\']?\\n\\n.*?(?=The user|I |Let me|First|Now|Based)', '', thought, flags=re.DOTALL)
+    # Strip anything that looks like quoted system prompt (actual newlines)
+    thought = re.sub(
+        r'^["\']?\n\n.*?(?=The user|I\b|Let me|First|Now|Based)',
+        '', thought, flags=re.DOTALL
+    )
     # Strip leading newlines/quotes
     thought = thought.strip().strip('"').strip("'").strip()
     return thought
@@ -70,11 +73,6 @@ def clean_thought(thought: str) -> str:
 # - Strips fake OBSERVATION/User/Assistant blocks the LLM tries to inject
 # - ACTION beats FINAL_ANSWER (never let LLM hallucinate completion)
 # - Strict ACTION pattern (must be followed by JSON)
-_HALLUCINATION_COUNT = 0
-
-
-def _get_hallucination_count() -> int:
-    return _HALLUCINATION_COUNT
 
 
 def _strip_fake_observations(text: str) -> str:
@@ -98,19 +96,11 @@ def _strip_fake_observations(text: str) -> str:
 
 
 def parse_llm_output(text: str):
-    global _HALLUCINATION_COUNT
-
-    # Strip <think>...</think> blocks
+    # Strip <think>...</think> blocks (Qwen/DeepSeek thinking tokens)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
     # CRITICAL: strip fake injected observations BEFORE looking for actions/answers
-    cleaned = _strip_fake_observations(text)
-
-    # Detect hallucination attempt: did stripping change the text?
-    if cleaned != text:
-        _HALLUCINATION_COUNT += 1
-
-    text = cleaned
+    text = _strip_fake_observations(text)
 
     # ── THOUGHT ──────────────────────────────────────────────────────────────
     thought = ""
@@ -129,9 +119,6 @@ def parse_llm_output(text: str):
                 try:
                     data = json.loads(json_str)
                     if "tool" in data:
-                        # If FINAL_ANSWER ALSO appears later, count as hallucination
-                        if re.search(r"FINAL_ANSWER:", text[brace_start:], re.IGNORECASE):
-                            _HALLUCINATION_COUNT += 1
                         return ToolCall(
                             tool=data.get("tool", ""),
                             args=data.get("args", {}),
@@ -153,24 +140,27 @@ def parse_llm_output(text: str):
             return FinalAnswer(content=content)
 
     # ── Fallback: scan entire text for any JSON with "tool" key ──────────────
-    brace_pos = 0
-    while True:
-        brace_pos = text.find("{", brace_pos)
-        if brace_pos == -1:
-            break
-        json_str = extract_json_object(text, brace_pos)
-        if json_str:
-            try:
-                data = json.loads(json_str)
-                if "tool" in data:
-                    return ToolCall(
-                        tool=data.get("tool", ""),
-                        args=data.get("args", {}),
-                        thought=thought,
-                    )
-            except json.JSONDecodeError:
-                pass
-        brace_pos += 1
+    # GUARD: only scan if no FINAL_ANSWER marker present
+    # Prevents misfiring on JSON examples inside a final answer
+    if not re.search(r"FINAL_ANSWER:", text, re.IGNORECASE):
+        brace_pos = 0
+        while True:
+            brace_pos = text.find("{", brace_pos)
+            if brace_pos == -1:
+                break
+            json_str = extract_json_object(text, brace_pos)
+            if json_str:
+                try:
+                    data = json.loads(json_str)
+                    if "tool" in data and isinstance(data.get("args"), dict):
+                        return ToolCall(
+                            tool=data.get("tool", ""),
+                            args=data.get("args", {}),
+                            thought=thought,
+                        )
+                except json.JSONDecodeError:
+                    pass
+            brace_pos += 1
 
     # ── No ACTION found — treat as final answer if there is content ──────────
     if len(text) > 20 and "ACTION" not in text.upper():
@@ -209,7 +199,6 @@ def is_garbage_output(text: str) -> bool:
     if not stripped:
         return True
     # Check if >70% is a single repeating char
-    from collections import Counter
     counts = Counter(stripped)
     most_common_char, most_common_count = counts.most_common(1)[0]
     ratio = most_common_count / len(stripped)

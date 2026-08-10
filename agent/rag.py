@@ -22,7 +22,8 @@ from agent import symbol_index as _symbols
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
-WORKSPACE = Path(os.getenv("WORKSPACE_DIR", ".")).expanduser().resolve()
+# NOTE: WORKSPACE is read dynamically via _get_workspace() on every call
+# so /workspace switches take effect immediately without restart
 from agent.paths import chroma_dir, hash_file as _hash_file
 INDEX_DIR = chroma_dir()
 HASH_FILE = _hash_file()
@@ -32,6 +33,17 @@ PARALLEL_EMBEDDINGS = int(os.getenv("PARALLEL_EMBEDDINGS", "8"))
 
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
 HASH_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _get_workspace() -> Path:
+    """Read workspace dynamically - respects /workspace switches mid-session."""
+    return Path(os.getenv("WORKSPACE_DIR", ".")).expanduser().resolve()
+
+
+# Keep WORKSPACE as a property-like alias for backward compat
+# Any internal code that used WORKSPACE now calls _get_workspace()
+def _workspace() -> Path:
+    return _get_workspace()
 
 INDEXABLE_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".vue",
@@ -109,10 +121,24 @@ def get_embeddings_parallel(texts: list[str], max_workers: int = None) -> list[l
 # ── Chroma ────────────────────────────────────────────────────────────────────
 _client = None
 _collection = None
+_collection_workspace: str = ""  # track which workspace collection was built for
 
 
-def get_collection():
-    global _client, _collection
+def get_collection(force_reset: bool = False):
+    """Get or create ChromaDB collection.
+
+    Automatically resets if workspace has changed since last call.
+    This ensures /workspace switches get a fresh collection instantly.
+    """
+    global _client, _collection, _collection_workspace
+    current_ws = str(_get_workspace())
+
+    # Reset if workspace changed or forced
+    if force_reset or _collection_workspace != current_ws:
+        _client = None
+        _collection = None
+        _collection_workspace = current_ws
+
     if _collection is None:
         _client = chromadb.PersistentClient(
             path=str(INDEX_DIR),
@@ -122,6 +148,7 @@ def get_collection():
             name="codebase",
             metadata={"description": "Indexed code chunks", "hnsw:space": "cosine"},
         )
+        _collection_workspace = current_ws
     return _collection
 
 
@@ -134,7 +161,7 @@ def chunk_file(content: str, filename: str, max_lines: int = 50) -> list[dict]:
     PLUS extra keys consumers can use:
       {type, name, signature, parent, docstring, _chunk_obj}
     """
-    chunks = chunk_code(content, filename)
+    chunks = chunk_code(content, filename, max_lines=max_lines)
     out = []
     for c in chunks:
         out.append({
@@ -191,7 +218,7 @@ def index_single_file(filepath: Path, root: Path = None) -> dict:
     Phase 2B.2: also populates the SQLite symbol index.
     Returns {chunks_added, deleted, status}.
     """
-    root = root or WORKSPACE
+    root = root or _get_workspace()
     collection = get_collection()
     rel_path = str(filepath.relative_to(root))
 
@@ -263,6 +290,15 @@ def index_single_file(filepath: Path, root: Path = None) -> dict:
 
     if ids:
         collection.upsert(ids=ids, embeddings=embs, documents=docs, metadatas=metas)
+        # Only save hash if at least SOME chunks were successfully embedded
+        # If ALL embeddings failed, do NOT save hash - file will be retried next run
+        hashes[ws_key][rel_path] = h
+        _save_hashes(hashes)
+    else:
+        # All embeddings failed - do not mark as indexed
+        # File will be retried on next /index run
+        _log_msg = f"[rag] All embeddings failed for {rel_path} - will retry next index"
+        pass  # silent fail, file stays un-hashed
 
     # Phase 2B.2: also populate SQLite symbol index
     try:
@@ -270,9 +306,6 @@ def index_single_file(filepath: Path, root: Path = None) -> dict:
         _symbols.add_symbols(str(root), rel_path, chunk_objs)
     except Exception:
         pass
-
-    hashes[ws_key][rel_path] = h
-    _save_hashes(hashes)
 
     return {"status": "indexed", "deleted": deleted, "chunks_added": len(ids)}
 
@@ -283,7 +316,7 @@ def index_codebase(root: Path = None, verbose: bool = True, force: bool = False)
     Phase 2B.2: also rebuilds the SQLite symbol index for changed files.
     Pass force=True to re-embed everything regardless.
     """
-    root = root or WORKSPACE
+    root = root or _get_workspace()
     collection = get_collection()
     stats = {
         "files_scanned": 0, "files_indexed": 0, "files_unchanged": 0,
@@ -448,12 +481,13 @@ def search_code(query: str, n_results: int = 5) -> list[dict]:
 def index_stats() -> dict:
     collection = get_collection()
     hashes = _load_hashes()
-    ws_key = str(WORKSPACE)
+    ws_key = str(_get_workspace())
     return {
         "total_chunks": collection.count(),
         "tracked_files": len(hashes.get(ws_key, {})),
         "index_path": str(INDEX_DIR),
         "hash_file": str(HASH_FILE),
+        "workspace": ws_key,
     }
 
 
@@ -469,7 +503,7 @@ def clear_index():
 
     # Clear hashes for this workspace
     hashes = _load_hashes()
-    ws_key = str(WORKSPACE)
+    ws_key = str(_get_workspace())
     if ws_key in hashes:
         del hashes[ws_key]
         _save_hashes(hashes)

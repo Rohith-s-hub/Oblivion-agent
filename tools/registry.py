@@ -244,6 +244,11 @@ TOOL_SCHEMAS = [
     },
 ]
 
+def _finish(summary: str = "Task complete.") -> str:
+    """finish tool handler - signals task completion."""
+    return f"DONE: {summary}"
+
+
 TOOL_FUNCTIONS = {
     "search_code":  search_code,
     "read_file":    read_file,
@@ -267,18 +272,22 @@ TOOL_FUNCTIONS = {
     "start_server": start_server,
     "list_servers":  list_servers,
     "stop_server":   stop_server,
+    "finish":        _finish,   # was missing - runtime handles it first
+                                # but dispatch fallback now works too
 }
 
 
 def get_tool_descriptions() -> str:
     lines = []
     for tool in TOOL_SCHEMAS:
+        # required is a per-param flag in our schema (not JSON Schema standard)
+        # v.get("required", False) correctly reads it from each param spec
         params = ", ".join(
-            f"{k}: {v['type']}{'?' if not v.get('required') else ''}"
+            f"{k}: {v['type']}{'?' if not v.get('required', False) else ''}"
             for k, v in tool["parameters"].items()
         )
         lines.append(f"  • {tool['name']}({params})")
-        lines.append(f"    → {tool['description']}")
+        lines.append(f"    → {tool['description'].split(chr(10))[0][:100]}")
     return "\n".join(lines)
 
 
@@ -286,6 +295,15 @@ def dispatch(tool_name: str, args: dict) -> str:
     if tool_name not in TOOL_FUNCTIONS:
         return f"Error: Unknown tool '{tool_name}'"
     try:
-        return str(TOOL_FUNCTIONS[tool_name](**args))
+        result = str(TOOL_FUNCTIONS[tool_name](**args))
+        # After workspace switch - reset RAG collection so
+        # searches use the new workspace immediately
+        if tool_name == "new_workspace":
+            try:
+                from agent.rag import get_collection
+                get_collection(force_reset=True)
+            except Exception:
+                pass
+        return result
     except Exception as e:
         return f"Error running {tool_name}: {e}"

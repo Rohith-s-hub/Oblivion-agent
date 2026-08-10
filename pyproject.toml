@@ -35,7 +35,6 @@ dependencies = [
     "edge-tts>=6.1.0",
     "watchdog>=4.0.0",
     "mcp>=1.0.0",
-    "elevenlabs>=2.52.0",
 ]
 
 [project.optional-dependencies]
@@ -45,7 +44,7 @@ voice = [
     "numpy>=2.0.0",
     "scipy>=1.13.0",
 ]
-premium-voice = ["elevenlabs>=1.0.0"]
+premium-voice = ["elevenlabs>=2.52.0"]
 all = ["oblivion-agent[voice,premium-voice]"]
 
 [project.scripts]

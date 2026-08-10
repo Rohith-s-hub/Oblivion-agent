@@ -34,7 +34,7 @@ FALLBACK_CHAIN = [
 ]
 
 # How long to keep a model "exhausted" before retrying (seconds)
-EXHAUSTION_COOLDOWN = 1800  # 30 minutes (was 5, prevents fallback flapping)
+EXHAUSTION_COOLDOWN = 1800  # 30 minutes cooldown before retrying exhausted models
 
 # Errors that trigger fallback (case-insensitive substring match)
 RETRYABLE_ERROR_HINTS = [
@@ -142,20 +142,52 @@ class LLMClient:
 
     # ── Core: call one specific model (no fallback logic) ───────────────────
     def _call_model(self, model: str, messages: list, on_token=None) -> str:
-        response = litellm.completion(
-            model=model,
-            messages=messages,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            stream=False,
-            timeout=90,
-        )
-        full = response.choices[0].message.content or ""
-        if on_token and full:
-            on_token(full)
-        self.total_output_tokens += len(full) // 4
-        self.total_input_tokens += sum(len(m.get("content", "")) for m in messages) // 4
-        return full
+        if on_token:
+            # TRUE streaming: token by token, not dump-at-end
+            response = litellm.completion(
+                model=model,
+                messages=messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                stream=True,
+                timeout=90,
+            )
+            full = ""
+            for chunk in response:
+                delta = ""
+                try:
+                    delta = chunk.choices[0].delta.content or ""
+                except Exception:
+                    pass
+                if delta:
+                    full += delta
+                    try:
+                        on_token(delta)
+                    except Exception:
+                        pass
+            # Token stats after streaming
+            self.total_output_tokens += len(full) // 4
+            self.total_input_tokens += sum(len(m.get("content", "")) for m in messages) // 4
+            return full
+        else:
+            # Non-streaming: use real token counts from API
+            response = litellm.completion(
+                model=model,
+                messages=messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                stream=False,
+                timeout=90,
+            )
+            full = response.choices[0].message.content or ""
+            # Use real token counts if available
+            if hasattr(response, "usage") and response.usage:
+                self.total_input_tokens += getattr(response.usage, "prompt_tokens", 0) or 0
+                self.total_output_tokens += getattr(response.usage, "completion_tokens", 0) or 0
+            else:
+                self.total_output_tokens += len(full) // 4
+                self.total_input_tokens += sum(len(m.get("content", "")) for m in messages) // 4
+            return full
 
     # ── Public: streaming chat with auto-fallback ───────────────────────────
     def chat_stream(self, messages: list, on_token=None) -> str:
@@ -166,22 +198,21 @@ class LLMClient:
         """
         chain = self._build_chain()
         last_error = None
-        attempted = []
+        failed_count = 0  # track actual failures not skips
 
         for model in chain:
             if self._is_exhausted(model):
-                attempted.append(model + " (exhausted)")
-                continue
+                continue  # silently skip exhausted models
 
             try:
-                if attempted:  # we're falling back, not on primary
+                if failed_count > 0:  # only notify on actual failure fallback
                     short = model.split("/")[-1][:30]
                     self._notify("falling back to " + short + "...")
                 return self._call_model(model, messages, on_token)
 
             except Exception as e:
                 last_error = e
-                attempted.append(model)
+                failed_count += 1
 
                 if not _is_retryable(e):
                     # Non-retryable error (e.g. bad request, auth) — stop trying
@@ -196,10 +227,11 @@ class LLMClient:
 
         # All models exhausted
         tried = ", ".join(m.split("/")[-1][:20] for m in chain)
+        last_err_str = _short_error(last_error) if last_error else "unknown"
         raise RuntimeError(
-            "All " + str(len(chain)) + " models in fallback chain failed. "
-            "Tried: " + tried + ". "
-            "Last error: " + _short_error(last_error) if last_error else "unknown"
+            f"All {len(chain)} models in fallback chain failed. "
+            f"Tried: {tried}. "
+            f"Last error: {last_err_str}"
         )
 
     # ── CLI-compatible non-streaming chat ───────────────────────────────────

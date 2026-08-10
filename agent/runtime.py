@@ -29,7 +29,7 @@ from typing import Any, Awaitable, Callable, Optional
 from agent.parser import parse_llm_output, ToolCall, FinalAnswer, is_garbage_output
 from agent.brain import compress_conversation, needs_compression, summarize_via_llm
 from tools.registry import dispatch
-from agent.permissions import needs_approval as tier_needs_approval, classify_tool, network_disclosure
+from agent.permissions import needs_approval as tier_needs_approval, classify_tool
 
 
 def _estimate_tokens(messages: list) -> int:
@@ -201,9 +201,9 @@ class AgentRuntime:
                         pass
 
             # ── CONTEXT COMPRESSION ───────────────────────────────────────
-            # If conversation grew too long, summarize the middle so we don't blow
-            # past the LLM context window.
-            if needs_compression(self.agent.conversation):
+            # Only runs if the fast local compressor above did NOT already run.
+            # elif prevents double-compression in the same iteration.
+            elif needs_compression(self.agent.conversation):
                 try:
                     def _summary_fn(text):
                         return summarize_via_llm(self.agent.llm, text)
@@ -227,15 +227,37 @@ class AgentRuntime:
                 {"role": "system", "content": self.agent.system_prompt}
             ] + self.agent.conversation
 
-            # RATE LIMIT GUARD: small delay to stay under free-tier RPM limits
-            # Gemini free: 10 req/min. With 1.5s delay we max out at 40 req/min (safe).
-            import time as _time
-            _time.sleep(1.5)
+            # RATE LIMIT GUARD: model-aware delay to stay under free-tier RPM limits
+            # Gemini free: 10 req/min (~6s delay). Groq: 500 req/min (no delay needed).
+            _model_id = self.agent.llm.model
+            if "gemini" in _model_id:
+                time.sleep(6.0)   # Gemini free: 10 req/min
+            elif "groq" in _model_id:
+                time.sleep(0.5)   # Groq: very high limits
+            elif "ollama" in _model_id:
+                time.sleep(0.0)   # Local: no rate limit
+            else:
+                time.sleep(1.5)   # OpenRouter/others: conservative
 
             # Stream LLM output to UI via callback
             llm_output = await self._stream_llm(messages, cb)
             if llm_output is None:
                 return None
+
+            # Detect context overflow / model meltdown
+            if is_garbage_output(llm_output):
+                _log_event(self.session_id, "garbage_output", {
+                    "step": step, "preview": llm_output[:100],
+                })
+                self.agent.conversation.append({
+                    "role": "user",
+                    "content": (
+                        "Your last response was unreadable (repeated characters or empty). "
+                        "This usually means context overflow. "
+                        "Give a short FINAL_ANSWER summarizing what you have done so far."
+                    ),
+                })
+                continue
 
             self.agent.conversation.append({"role": "assistant", "content": llm_output})
             _log_event(self.session_id, "llm_output", {"step": step, "chars": len(llm_output)})
@@ -309,38 +331,49 @@ class AgentRuntime:
                     recent_calls.clear()
                     continue
 
-                # APPROVAL for sensitive tools
+                # APPROVAL: use v3 permission tier system
                 approved = True
-                needs_approval = tool_name in ("write_file", "edit_file", "run_bash")
+                result = None  # will be set if blocked before execution
 
-                # HARD SAFETY: rm -rf and other destructive bash always need approval
-                if tool_name == "run_bash":
-                    try:
-                        from tools.bash import is_dangerous_command
-                        if is_dangerous_command(tool_args.get("command", "")):
-                            needs_approval = True
-                            _log_event(self.session_id, "danger_detected", {
-                                "command": tool_args.get("command", "")[:200]
-                            })
-                    except ImportError:
-                        pass
+                _needs_approval, _reason = tier_needs_approval(
+                    tool_name, tool_args, self.session_state
+                )
 
-                if needs_approval:
+                _log_event(self.session_id, "permission_check", {
+                    "step": step,
+                    "tool": tool_name,
+                    "needs_approval": _needs_approval,
+                    "reason": _reason,
+                })
+
+                if _needs_approval:
                     if cb.on_approve_tool:
                         try:
                             approved = await cb.on_approve_tool(tool_name, tool_args)
                         except Exception:
                             approved = False
+                        if not approved:
+                            result = f"User denied {tool_name}."
                     else:
-                        # No approval callback registered = treat as denied for safety
-                        approved = False
-                        result = "BLOCKED: " + tool_name + " requires approval but no approval handler is registered."
+                        # No approval callback = safe default: block mutate, 
+                        # always block destructive
+                        if _reason == "destructive":
+                            approved = False
+                            result = (
+                                f"BLOCKED: {tool_name} classified as destructive "
+                                f"and no approval handler is registered. "
+                                f"This is a safety block."
+                            )
+                        else:
+                            # mutate tier with no handler = auto-approve
+                            # (CLI mode has no TUI approval callback)
+                            approved = True
 
                 # Execute
                 t0 = time.perf_counter()
-                if not approved:
+                if not approved and result is None:
                     result = f"User denied {tool_name}."
-                else:
+                elif approved:
                     try:
                         result = await asyncio.to_thread(dispatch, tool_name, tool_args)
                     except Exception as e:
