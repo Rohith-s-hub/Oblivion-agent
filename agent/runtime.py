@@ -139,7 +139,7 @@ class RuntimeCallbacks:
 class AgentRuntime:
     """The single agent loop. UI-agnostic."""
 
-    def __init__(self, agent, session_id: int, max_iterations: int = 20):
+    def __init__(self, agent, session_id: int, max_iterations: int = 15):
         """
         agent: an instance of agent.core.Agent (we use agent.llm, agent.system_prompt, agent.conversation)
         session_id: int from db.store.create_session
@@ -165,6 +165,10 @@ class AgentRuntime:
             self.agent.refresh_prompt(user_message)
         except Exception:
             pass  # best-effort; never break the loop
+
+        # Note: previously auto-switched to Gemini for websites, but this
+        # caused quota exhaustion cascades. Now we trust the user's chosen
+        # model and rely on FALLBACK_CHAIN for reliability.
         _log_event(self.session_id, "user_message", {"content": user_message})
 
         # LOOP DETECTION: track recent tool calls to catch the agent repeating itself
@@ -278,6 +282,10 @@ class AgentRuntime:
                     except Exception:
                         pass
                 return parsed.content
+
+            # Reset parse fail counter on any successful parse
+            if hasattr(self, "_parse_fail_count"):
+                self._parse_fail_count = 0
 
             # ─── Tool call
             if isinstance(parsed, ToolCall):
@@ -431,6 +439,32 @@ class AgentRuntime:
 
             # ─── Parser failure
             _log_event(self.session_id, "parse_failure", {"raw": llm_output[:300]})
+
+            # CIRCUIT BREAKER: after 3 parse failures in a row, force stop
+            if not hasattr(self, "_parse_fail_count"):
+                self._parse_fail_count = 0
+            self._parse_fail_count += 1
+
+            if self._parse_fail_count >= 3:
+                _log_event(self.session_id, "parse_circuit_breaker", {
+                    "count": self._parse_fail_count,
+                })
+                stop_msg = (
+                    "I hit a parsing loop and stopped to save your tokens.\n\n"
+                    "This usually means the model is getting confused by a large context.\n"
+                    "Try:\n"
+                    "  1. /clear  to reset conversation\n"
+                    "  2. Rephrase your request more simply\n"
+                    "  3. /model  to try a different model"
+                )
+                if cb.on_final:
+                    try:
+                        await cb.on_final(stop_msg)
+                    except Exception:
+                        pass
+                self._parse_fail_count = 0  # reset for next run
+                return stop_msg
+
             if cb.on_parse_failure:
                 try:
                     await cb.on_parse_failure(llm_output)

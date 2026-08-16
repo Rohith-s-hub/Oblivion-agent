@@ -1,4 +1,4 @@
-from tools.filesystem import read_file, write_file, list_dir, grep_files, file_exists, create_dir, new_workspace
+from tools.filesystem import read_file, write_file, list_dir, grep_files, file_exists, create_dir, new_workspace, switch_workspace
 from tools.planner import plan_task
 from tools.bash import run_bash, start_server, list_servers, stop_server
 from tools.edit_file import edit_file, insert_after
@@ -108,6 +108,20 @@ TOOL_SCHEMAS = [
         "description": "Create a directory (and parents if needed).",
         "parameters": {
             "path": {"type": "string", "description": "Directory to create", "required": True},
+        },
+    },
+    {
+        "name": "switch_workspace",
+        "description": (
+            "Switch active workspace to an EXISTING folder. "
+            "USE THIS when user says: 'go into <folder>', 'switch to <folder>', "
+            "'work in <folder>', 'cd to <folder>', 'change to <folder>'. "
+            "Path can be: absolute (/home/rohit/x), relative (~/Projects/x), "
+            "just a folder name (looks in Projects/), or relative to current workspace. "
+            "After switch, ALL subsequent file operations happen in the new workspace."
+        ),
+        "parameters": {
+            "path": {"type": "string", "description": "Folder path to switch to", "required": True},
         },
     },
     {
@@ -447,6 +461,7 @@ TOOL_FUNCTIONS = {
     "file_exists":  file_exists,
     "create_dir":   create_dir,
     "new_workspace": new_workspace,
+    "switch_workspace": switch_workspace,
     "run_bash":     run_bash,
     "verify_code":  verify_code,
     "find_symbol":   find_symbol,

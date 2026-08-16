@@ -207,3 +207,74 @@ def cleanup_empty_sessions() -> int:
     except Exception:
         return 0
 
+
+
+def get_recent_sessions(limit: int = 5) -> list:
+    """
+    Get recent sessions formatted for the welcome panel.
+    Returns: [{ago, preview, session_id, msg_count}, ...] sorted newest first.
+    Filters out empty sessions (0 messages).
+    """
+    from datetime import datetime
+
+    try:
+        sessions = list_sessions_enriched(limit=limit * 3)  # extra to filter empty
+    except Exception:
+        return []
+
+    def _humanize(ts_str) -> str:
+        """Convert timestamp to '5m ago' / '2h ago' / '3d ago' format."""
+        if not ts_str:
+            return "?"
+        try:
+            if isinstance(ts_str, str):
+                # SQLite format: "2026-08-13 15:11:06"
+                dt = datetime.strptime(ts_str.split(".")[0], "%Y-%m-%d %H:%M:%S")
+            else:
+                dt = ts_str
+
+            now = datetime.now()
+            delta = now - dt
+            seconds = int(delta.total_seconds())
+
+            # Handle future dates (clock skew) - show as "now"
+            if seconds < 0:
+                return "now"
+            if seconds < 60:
+                return f"{seconds}s ago"
+            if seconds < 3600:
+                return f"{seconds // 60}m ago"
+            if seconds < 86400:
+                return f"{seconds // 3600}h ago"
+            if seconds < 604800:
+                return f"{seconds // 86400}d ago"
+            return f"{seconds // 604800}w ago"
+        except Exception:
+            return "?"
+
+    result = []
+    for s in sessions:
+        # DB uses "messages" field for count
+        msg_count = s.get("messages", 0) or 0
+        if msg_count == 0:
+            continue
+
+        # Prefer preview (actual first user message) over generic session name
+        preview = s.get("preview", "") or ""
+        if not preview or preview == "(empty)":
+            preview = s.get("name", "(untitled)")
+
+        # Prefer updated_at (last activity) over created_at
+        ts = s.get("updated_at") or s.get("created_at") or ""
+
+        result.append({
+            "session_id": s.get("id"),
+            "ago": _humanize(ts),
+            "preview": preview[:40],
+            "msg_count": msg_count,
+        })
+
+        if len(result) >= limit:
+            break
+
+    return result

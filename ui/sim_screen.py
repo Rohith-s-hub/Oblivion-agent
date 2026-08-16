@@ -48,24 +48,9 @@ SimScreen {
     overflow: hidden;
 }
 
-#sim-reg-row {
-    height: 9;
-    overflow: hidden;
-}
-
-#sim-registers {
-    width: 50%;
-    height: 100%;
+#sim-reg-panel {
+    height: 14;
     border: tall #febc2e;
-    padding: 0 1;
-    background: #0d0f14;
-    overflow: hidden;
-}
-
-#sim-flags-io {
-    width: 50%;
-    height: 100%;
-    border: tall #ff006e;
     padding: 0 1;
     background: #0d0f14;
     overflow: hidden;
@@ -140,28 +125,37 @@ class SimScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            "[bold #00ff9f]OBLIVION[/bold #00ff9f] [bold #7b8cde]8085 SIMULATOR[/bold #7b8cde]"
-            "  [dim]| Click buttons below | Ask Meera for code[/dim]",
+            "[bold #febc2e]\u25c6 OBLIVION[/bold #febc2e] [bold #7b8cde]8085 SIMULATOR[/bold #7b8cde]"
+            "                                              "
+            "[dim]ORIGIN[/dim] [bold]{org}[/bold]  "
+            "[dim]PC[/dim] [bold]{pc}[/bold]  "
+            "[dim]CYCLES[/dim] [bold]{cyc}[/bold]  "
+            "{status}".format(
+                org=f"{self.cpu.PC:04X}H" if self.cpu.instruction_count == 0 else f"{self.mem_start:04X}H" if hasattr(self, "mem_start") else "2000H",
+                pc=f"{self.cpu.PC:04X}H",
+                cyc=str(self.cpu.instruction_count),
+                status="[bold #00ff9f]\u25cf READY[/bold #00ff9f]" if not self.cpu.halted and self.cpu.instruction_count == 0 else "[bold #ff006e]\u25cf HALTED[/bold #ff006e]" if self.cpu.halted else "[bold #febc2e]\u25cf RUNNING[/bold #febc2e]",
+            ),
             id="sim-header",
         )
         with Horizontal(id="sim-main"):
             with Vertical(id="sim-left"):
                 with Vertical(id="sim-code-panel"):
-                    yield Label("[bold #7b8cde]ASSEMBLY CODE[/bold #7b8cde]")
+                    yield Label("[bold #7b8cde]main.asm [#00ff9f]\u25cf[/#00ff9f][/bold #7b8cde]")
                     yield TextArea(DEFPROG, id="sim-code")
             with Vertical(id="sim-right"):
                 with Horizontal(id="sim-reg-row"):
                     with Vertical(id="sim-registers"):
-                        yield Label("[bold #febc2e]REGISTERS[/bold #febc2e]")
+                        yield Label("[bold #febc2e]\u2502 REGISTERS & FLAGS[/bold #febc2e]                    [dim]word size 8-bit[/dim]")
                         yield Static(self._fmt_regs(), id="sim-reg-display")
                     with Vertical(id="sim-flags-io"):
-                        yield Label("[bold #ff006e]FLAGS[/bold #ff006e]")
+
                         yield Static(self._fmt_flags(), id="sim-flags-display")
                 with Vertical(id="sim-memory"):
-                    yield Label("[bold #00d9ff]MEMORY[/bold #00d9ff]")
+                    yield Label("[bold #00d9ff]\u2502 MEMORY[/bold #00d9ff]                                    [dim]range 2000H-2038H[/dim]")
                     yield Static(self._fmt_mem(), id="sim-mem-display")
                 with Vertical(id="sim-output"):
-                    yield Label("[bold #00ff9f]EXECUTION TRACE[/bold #00ff9f]")
+                    yield Label("[bold #00ff9f]\u2502 EXECUTION TRACE[/bold #00ff9f]                              [dim]{steps} steps[/dim]".format(steps=self.cpu.instruction_count))
                     yield RichLog(id="sim-log", wrap=True, markup=True)
         with Vertical(id="sim-bottom"):
             with Horizontal(id="sim-controls"):
@@ -172,19 +166,16 @@ class SimScreen(Screen):
                 yield Button("Clear", id="btn-clear", variant="default")
                 yield Button("Back", id="btn-back", variant="error")
             with Horizontal(id="sim-meera-box"):
-                yield Label("[bold #00ff9f]MEERA:[/bold #00ff9f] ")
+                yield Label("[bold #febc2e]MEERA[/bold #febc2e] [#00ff9f]>[/#00ff9f] ")
                 yield Input(placeholder="Ask Meera to write assembly code...", id="sim-meera-input")
         yield Footer()
 
     def _fmt_regs(self):
         c = self.cpu
         p = self.prev_state
-        def hl(name, val, old_val=None):
-            color = "#00ff9f" if old_val is not None and val != old_val else "#e8e8e8"
-            return f"[bold #febc2e]{name}[/bold #febc2e] [{color}]{val:02X}[/{color}]"
-        def hl16(name, val, old_val=None):
-            color = "#00ff9f" if old_val is not None and val != old_val else "#e8e8e8"
-            return f"[bold #9aa0b8]{name}[/bold #9aa0b8] [{color}]{val:04X}[/{color}]"
+        def cv(val, old=None):
+            color = "#00ff9f" if old is not None and val != old else "#e8e8e8"
+            return f"[bold {color}]{val:02X}[/bold {color}]"
         pa = p.A if p else None
         pb = p.B if p else None
         pc_ = p.C if p else None
@@ -196,33 +187,37 @@ class SimScreen(Screen):
         de = (c.D << 8) | c.E
         hl_val = (c.H << 8) | c.L
         return (
-            f"  {hl('A', c.A, pa)}\n\n"
-            f"  {hl('B', c.B, pb)}  {hl('C', c.C, pc_)}  [dim]BC={bc:04X}[/dim]\n"
-            f"  {hl('D', c.D, pd)}  {hl('E', c.E, pe)}  [dim]DE={de:04X}[/dim]\n"
-            f"  {hl('H', c.H, ph)}  {hl('L', c.L, pl)}  [dim]HL={hl_val:04X}[/dim]\n\n"
-            f"  {hl16('SP', c.SP)}  {hl16('PC', c.PC)}"
+            f"  [dim]A[/dim]              [dim]B[/dim]              [dim]C[/dim]\n"
+            f"  {cv(c.A, pa)}             {cv(c.B, pb)}             {cv(c.C, pc_)}\n"
+            f"\n"
+            f"  [dim]D[/dim]              [dim]E[/dim]              [dim]H / L[/dim]\n"
+            f"  {cv(c.D, pd)}             {cv(c.E, pe)}             {cv(c.H, ph)} [dim]\u00b7[/dim] {cv(c.L, pl)}\n"
+            f"\n"
+            f"  [dim]BC[/dim]                                 [bold #febc2e]{bc:04X}[/bold #febc2e]\n"
+            f"  [dim]DE[/dim]                                 [bold #febc2e]{de:04X}[/bold #febc2e]\n"
+            f"  [dim]HL[/dim]                                 [bold #febc2e]{hl_val:04X}[/bold #febc2e]"
         )
 
+
     def _fmt_flags(self):
+        """Kept for backward compatibility. Flags now shown in _fmt_combined."""
         c = self.cpu
-        s = "[bold #ff006e]HALTED[/bold #ff006e]" if c.halted else "[bold #00ff9f]READY[/bold #00ff9f]" if c.instruction_count == 0 else "[bold #febc2e]RUNNING[/bold #febc2e]"
         flag_byte = (c.S << 7) | (c.Z << 6) | (c.AC << 4) | (c.P << 2) | (1 << 1) | c.CY
-        fb = f"{flag_byte:08b}"
+        s = "[bold #ff006e]HALTED[/bold #ff006e]" if c.halted else "[bold #00ff9f]READY[/bold #00ff9f]" if c.instruction_count == 0 else "[bold #febc2e]RUNNING[/bold #febc2e]"
         def fc(name, val):
-            color = "#00ff9f" if val else "#3e4560"
-            return f"[{color}]{name}={val}[/{color}]"
+            if val:
+                return f"[bold #febc2e]{name}[/bold #febc2e] [bold #00ff9f]{val}[/bold #00ff9f]"
+            return f"[dim]{name}[/dim] [dim]{val}[/dim]"
         return (
-            f"  {fc('S', c.S)}  {fc('Z', c.Z)}  {fc('AC', c.AC)}\n"
-            f"  {fc('P', c.P)}  {fc('CY', c.CY)}\n\n"
-            f"  [dim]Flag byte:[/dim] [#9aa0b8]{fb}[/#9aa0b8]\n\n"
-            f"  Status: {s}\n"
-            f"  [dim]Steps: {c.instruction_count}[/dim]"
+            f"  {fc('S', c.S)}   {fc('Z', c.Z)}   {fc('AC', c.AC)}   {fc('P', c.P)}   {fc('CY', c.CY)}\n\n"
+            f"  [dim]Flags:[/dim] [#9aa0b8]{flag_byte:08b}[/#9aa0b8]\n\n"
+            f"  Status: {s}"
         )
 
     def _fmt_mem(self, start=None, length=64):
-        if start is None: start = self.mem_start
+        if start is None: start = getattr(self, "mem_start", 0x2000)
         out = []
-        out.append("[dim]ADDR  00 01 02 03 04 05 06 07  ASCII[/dim]")
+        out.append("[dim]  ADDR    00   01   02   03   04   05   06   07   ASCII[/dim]")
         for i in range(0, length, 8):
             a = (start + i) & 0xFFFF
             hexparts = []
@@ -249,6 +244,17 @@ class SimScreen(Screen):
             self.query_one("#sim-reg-display", Static).update(self._fmt_regs())
             self.query_one("#sim-flags-display", Static).update(self._fmt_flags())
             self.query_one("#sim-mem-display", Static).update(self._fmt_mem())
+            # Update header with current PC/cycles/status
+            org = getattr(self, "mem_start", 0x2000)
+            status = "[bold #00ff9f]\u25cf READY[/bold #00ff9f]" if not self.cpu.halted and self.cpu.instruction_count == 0 else "[bold #ff006e]\u25cf HALTED[/bold #ff006e]" if self.cpu.halted else "[bold #febc2e]\u25cf RUNNING[/bold #febc2e]"
+            self.query_one("#sim-header", Static).update(
+                f"[bold #febc2e]\u25c6 OBLIVION[/bold #febc2e] [bold #7b8cde]8085 SIMULATOR[/bold #7b8cde]"
+                f"                                              "
+                f"[dim]ORIGIN[/dim] [bold]{org:04X}H[/bold]  "
+                f"[dim]PC[/dim] [bold]{self.cpu.PC:04X}H[/bold]  "
+                f"[dim]CYCLES[/dim] [bold]{self.cpu.instruction_count}[/bold]  "
+                f"{status}"
+            )
             pass  # stack panel removed for cleaner layout
         except Exception as e: self.log(f"REFRESH ERROR: {e}")
 
@@ -381,5 +387,12 @@ class SimScreen(Screen):
         self.step_count = 0
         self._log("[#febc2e]\u21bb CPU reset to initial state.[/#febc2e]")
         self._refresh()
+
+    def on_mount(self) -> None:
+        """Show placeholder text when simulator first loads."""
+        self._log("")
+        self._log("[dim]        No instructions executed yet[/dim]")
+        self._log("[dim]        Press [bold]Load[/bold] then [bold]Step[/bold] or [bold]Run[/bold] to begin execution[/dim]")
+        self._log("")
 
     def action_go_back(self): self.app.pop_screen()

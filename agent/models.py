@@ -22,7 +22,7 @@ MODELS = {
         "color": "#4285f4",
         "api_key_env": None,
         "context_window": 131_072,
-        "rate_limit_delay": 0.0,
+        "rate_limit_delay": 1.0,  # 60.0 RPM max  # unlimited RPM max
     },
     "qwen35-local": {
         "id": "ollama/qwen3.5:4b",
@@ -44,7 +44,7 @@ MODELS = {
         "color": "#ff9500",
         "api_key_env": "GROQ_API_KEY",
         "context_window": 128_000,
-        "rate_limit_delay": 0.5,
+        "rate_limit_delay": 2.0,  # 30.0 RPM max
     },
     "groq-deepseek": {
         "id": "groq/deepseek-r1-distill-llama-70b",
@@ -55,7 +55,7 @@ MODELS = {
         "color": "#ff9500",
         "api_key_env": "GROQ_API_KEY",
         "context_window": 128_000,
-        "rate_limit_delay": 0.5,
+        "rate_limit_delay": 2.0,  # 30.0 RPM max
     },
     "groq-gpt-oss": {
         "id": "groq/openai/gpt-oss-120b",
@@ -66,7 +66,7 @@ MODELS = {
         "color": "#ff9500",
         "api_key_env": "GROQ_API_KEY",
         "context_window": 128_000,
-        "rate_limit_delay": 0.5,
+        "rate_limit_delay": 2.0,  # 30.0 RPM max
     },
     "claude-sonnet": {
         "id": "anthropic/claude-sonnet-4-20250514",
@@ -77,7 +77,7 @@ MODELS = {
         "color": "#cc785c",
         "api_key_env": "ANTHROPIC_API_KEY",
         "context_window": 200_000,
-        "rate_limit_delay": 0.5,
+        "rate_limit_delay": 1.0,  # 60.0 RPM max
     },
     "gpt-4o": {
         "id": "openai/gpt-4o",
@@ -88,7 +88,7 @@ MODELS = {
         "color": "#10a37f",
         "api_key_env": "OPENAI_API_KEY",
         "context_window": 128_000,
-        "rate_limit_delay": 0.5,
+        "rate_limit_delay": 1.0,  # 60.0 RPM max
     },
     "deepseek": {
         "id": "deepseek/deepseek-chat",
@@ -99,7 +99,7 @@ MODELS = {
         "color": "#4d6bfe",
         "api_key_env": "DEEPSEEK_API_KEY",
         "context_window": 64_000,
-        "rate_limit_delay": 0.5,
+        "rate_limit_delay": 1.0,  # 60.0 RPM max
     },
     "gemini-flash": {
         "id": "gemini/gemini-2.5-flash",
@@ -110,7 +110,7 @@ MODELS = {
         "color": "#4285F4",
         "api_key_env": "GEMINI_API_KEY",
         "context_window": 1_048_576,
-        "rate_limit_delay": 6.0,
+        "rate_limit_delay": 6.0,  # 10.0 RPM max
         "supports_function_calling": True,
     },
     "gemini-pro": {
@@ -122,7 +122,7 @@ MODELS = {
         "color": "#1A73E8",
         "api_key_env": "GEMINI_API_KEY",
         "context_window": 2_097_152,
-        "rate_limit_delay": 10.0,
+        "rate_limit_delay": 12.0,  # 5.0 RPM max
         "supports_function_calling": True,
     },
     "nemotron-ultra": {
@@ -134,7 +134,7 @@ MODELS = {
         "color": "#76b900",
         "api_key_env": "OPENROUTER_API_KEY",
         "context_window": 1_000_000,
-        "rate_limit_delay": 1.0,
+        "rate_limit_delay": 3.0,  # 20.0 RPM max
     },
     "gpt-oss-or": {
         "id": "openrouter/openai/gpt-oss-20b:free",
@@ -145,7 +145,7 @@ MODELS = {
         "color": "#10a37f",
         "api_key_env": "OPENROUTER_API_KEY",
         "context_window": 131_072,
-        "rate_limit_delay": 1.0,
+        "rate_limit_delay": 3.0,  # 20.0 RPM max
     },
     "gemma-4-31b": {
         "id": "openrouter/google/gemma-4-31b-it:free",
@@ -156,7 +156,42 @@ MODELS = {
         "color": "#4285f4",
         "api_key_env": "OPENROUTER_API_KEY",
         "context_window": 262_144,
-        "rate_limit_delay": 1.0,
+        "rate_limit_delay": 3.0,  # 20.0 RPM max
+    },
+
+    # ═══ OLLAMA CLOUD MODELS (unlimited, no rate limits!) ═══════════════
+    "qwen3-coder": {
+        "id": "ollama/qwen3-coder:480b-cloud",
+        "provider": "ollama-cloud",
+        "speed": "medium",
+        "cost": "FREE (Ollama Cloud, unlimited)",
+        "description": "Qwen3 Coder 480B - CODING SPECIALIST via Ollama Cloud",
+        "color": "#00d9ff",
+        "api_key_env": None,
+        "context_window": 262_144,
+        "rate_limit_delay": 0.0,  # no rate limit on Ollama Cloud
+    },
+    "qwen3-general": {
+        "id": "ollama/qwen3.5:397b-cloud",
+        "provider": "ollama-cloud",
+        "speed": "medium",
+        "cost": "FREE (Ollama Cloud, unlimited)",
+        "description": "Qwen 3.5 397B - general purpose via Ollama Cloud",
+        "color": "#00d9ff",
+        "api_key_env": None,
+        "context_window": 32_768,
+        "rate_limit_delay": 0.0,
+    },
+    "glm-cloud": {
+        "id": "ollama/glm-5.2:cloud",
+        "provider": "ollama-cloud",
+        "speed": "medium",
+        "cost": "FREE (Ollama Cloud, unlimited)",
+        "description": "GLM 5.2 via Ollama Cloud (multilingual)",
+        "color": "#00d9ff",
+        "api_key_env": None,
+        "context_window": 32_768,
+        "rate_limit_delay": 0.0,
     },
 }
 

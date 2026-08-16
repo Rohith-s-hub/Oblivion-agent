@@ -610,7 +610,8 @@ class OblivionApp(App):
     ]
 
     TITLE = "◢◤ OBLIVION ◥◣"
-    SUB_TITLE = "▓ qwen3-coder:480b ▓ neural code agent ▓"
+    # Dynamically updated in on_mount / after model switches
+    SUB_TITLE = "▓ neural code agent ▓"
 
     iteration_count = reactive(0)
 
@@ -662,13 +663,36 @@ class OblivionApp(App):
     def _status_text(self) -> str:
         msgs = len(self.agent.conversation) if self.agent else 0
         workspace = os.path.basename(os.getenv("WORKSPACE_DIR", ".")) or "root"
-        model_name = os.getenv("DEFAULT_MODEL", "none").split("/")[-1][:20]
+
+        # Show DEFAULT model AND actual last-used (if different)
+        default_model = os.getenv("DEFAULT_MODEL", "none").split("/")[-1][:20]
+        model_display = default_model
+        try:
+            last_used = getattr(self.agent.llm, "last_used_model", None)
+            if last_used:
+                last_short = last_used.split("/")[-1][:20]
+                if last_short != default_model:
+                    model_display = f"{default_model}→{last_short}"
+        except Exception:
+            pass
+
+        # Token stats
         try:
             tokens = self.agent.llm.get_token_stats()
             tok_str = "tok:" + str(tokens["total"])
         except Exception:
             tok_str = "tok:0"
-        # AUTO mode indicator (yellow, impossible to miss)
+
+        # Exhausted models indicator
+        exhausted_str = ""
+        try:
+            exh = self.agent.llm.get_exhausted_models()
+            if exh:
+                exhausted_str = f"  |  [#febc2e]⚠{len(exh)} rate-limited[/#febc2e]"
+        except Exception:
+            pass
+
+        # AUTO mode indicator
         auto_prefix = ""
         try:
             st = self._runtime_state()
@@ -676,17 +700,20 @@ class OblivionApp(App):
                 auto_prefix = "[bold #febc2e][AUTO][/bold #febc2e] "
         except Exception:
             pass
+
         if self.agent_busy:
             status = auto_prefix + "thinking"
         else:
             status = auto_prefix + "ready"
+
         return (
             " " + status
-            + "  |  " + model_name
+            + "  |  " + model_display
             + "  |  " + workspace
             + "  |  msg:" + str(msgs)
             + "  |  " + tok_str
             + "  |  step:" + str(self.iteration_count)
+            + exhausted_str
             + "  |  ^Q quit  ^H help"
         )
 
@@ -720,13 +747,50 @@ class OblivionApp(App):
             self.meera_wave_phase = (self.meera_wave_phase + 1) % 10000
             self.update_status()
 
+    def _check_workspace_change(self):
+        """Poll for workspace changes and refresh tree + status if changed."""
+        try:
+            current = os.environ.get("WORKSPACE_DIR", "")
+            if current != getattr(self, "_last_known_workspace", ""):
+                self._last_known_workspace = current
+                self._populate_tree()
+                self.update_status()
+        except Exception:
+            pass
+
     def update_status(self):
         try:
             self.query_one("#status-bar", Static).update(self._status_text())
         except Exception:
             pass
+        # Also update the window title bar with current model
+        try:
+            self._update_sub_title()
+        except Exception:
+            pass
+
+    def _update_sub_title(self):
+        """Update the window title bar to show live current model."""
+        try:
+            import os as _os
+            model_id = _os.environ.get("DEFAULT_MODEL", "unknown")
+            # Take last part after / for readability
+            short = model_id.split("/")[-1][:30]
+            self.sub_title = f"▓ {short} ▓ neural code agent ▓"
+        except Exception:
+            pass
 
     async def on_mount(self) -> None:
+        # NUCLEAR FIX: restore workspace HERE - after all imports/init done
+        try:
+            from agent.paths import load_last_workspace
+            _last_ws = load_last_workspace()
+            if _last_ws:
+                import os as _osm
+                _osm.environ["WORKSPACE_DIR"] = _last_ws
+        except Exception:
+            pass
+
         init_db()
         # Clean up sessions from previous launches that had 0 messages
         try:
@@ -755,6 +819,9 @@ class OblivionApp(App):
         self.set_interval(0.1, self._animate_tick)
         # M.E.E.R.A. waveform tick (Pattern G)
         self.set_interval(0.1, self._meera_tick)
+        # Auto-refresh tree if workspace changed externally (e.g. by agent)
+        self._last_known_workspace = os.environ.get("WORKSPACE_DIR", "")
+        self.set_interval(2.0, self._check_workspace_change)
 
         # Start file watcher
         if self.auto_watch_enabled:
@@ -771,32 +838,30 @@ class OblivionApp(App):
         self.query_one("#input-box", Input).focus()
 
     async def _typewriter_intro(self, log) -> None:
-        """Show banner with typewriter effect."""
-        # Boot sequence messages
-        boot_msgs = [
-            ("[dim #7b8cde]▸ Initializing neural pathways...[/dim #7b8cde]", 0.05),
-            ("[dim #7b8cde]▸ Loading qwen3-coder weights...[/dim #7b8cde]", 0.05),
-            ("[dim #7b8cde]▸ Mounting vector database...[/dim #7b8cde]", 0.05),
-            ("[dim #7b8cde]▸ Activating tool registry...[/dim #7b8cde]", 0.05),
-            ("[dim #7b8cde]▸ Establishing neural link...[/dim #7b8cde]", 0.1),
-            ("[bold #7b8cde]▸ ALL SYSTEMS ONLINE[/bold #7b8cde]", 0.2),
-            ("", 0.1),
-        ]
+        """Show Oblivion AI boot + logo with typewriter effect."""
+        from ui.branding.logo import render_logo, render_boot_sequence
 
-        for msg, delay in boot_msgs:
+        # Boot messages
+        for msg, delay in render_boot_sequence():
             log.write(msg)
             await asyncio.sleep(delay)
 
-        # Banner - reveal line by line
-        for line in BANNER.splitlines():
-            if line.strip():
-                log.write(Align.center(Text(line, style="bold #7b8cde")))
-                await asyncio.sleep(0.04)
-
-        await asyncio.sleep(0.2)
-        log.write(Align.center(Text(TAGLINE, style="bold #febc2e")))
-        await asyncio.sleep(0.3)
         log.write("")
+
+        # Logo - render_logo() returns a list of pre-styled lines
+        # OR a single string (both handled)
+        logo_out = render_logo()
+        if isinstance(logo_out, list):
+            lines_to_write = logo_out
+        else:
+            lines_to_write = logo_out.split("\n")
+
+        for line in lines_to_write:
+            log.write(line)
+            await asyncio.sleep(0.04)
+
+        log.write("")
+        await asyncio.sleep(0.3)
 
         # System info panel
         # M.E.E.R.A. greeting
@@ -807,18 +872,65 @@ class OblivionApp(App):
             except Exception:
                 pass
 
+        # ── Personalized welcome card (Claude Code style) ─────────────
+        _user_name = os.getenv("FRIDAY_NAME", "boss")
+        _model_id = os.getenv("DEFAULT_MODEL", "unknown")
+        _model_short = _model_id.split("/")[-1][:30]
+        # Re-read WORKSPACE_DIR fresh (in case restore just happened)
+        _workspace = os.getenv("WORKSPACE_DIR", ".")
+        _workspace_display = _workspace.replace(os.path.expanduser("~"), "~")
+
+
+        # Get recent sessions for "Recent activity" panel
+        recent_sessions_text = ""
+        try:
+            from db.store import get_recent_sessions
+            recent = get_recent_sessions(limit=4)
+            if recent:
+                _lines = []
+                for sess in recent:
+                    ts = sess.get("ago", "?")
+                    preview = sess.get("preview", "")[:35]
+                    _lines.append(f"[#a78bfa]{ts:>7}[/#a78bfa]  [#e0e7ff]{preview}[/#e0e7ff]")
+                recent_sessions_text = "\n".join(_lines)
+            else:
+                recent_sessions_text = "[dim #7c8399]No previous sessions[/dim #7c8399]"
+        except Exception:
+            recent_sessions_text = "[dim #7c8399]Session history unavailable[/dim #7c8399]"
+
+        # Welcome panel content
+        welcome_content = (
+            f"[#e0e7ff]Welcome back, [bold #67e8f9]{_user_name}[/bold #67e8f9] 👋[/#e0e7ff]\n\n"
+            f"[#a78bfa]Model:[/#a78bfa]     [#e0e7ff]{_model_short}[/#e0e7ff]\n"
+            f"[#a78bfa]Workspace:[/#a78bfa] [#67e8f9]{_workspace_display}[/#67e8f9]\n"
+            f"[#a78bfa]Session:[/#a78bfa]   [#e0e7ff]#{self.session_id}[/#e0e7ff]"
+        )
+
         log.write(Panel(
-            "[#7b8cde]◢ NEURAL INTERFACE ACTIVE[/#7b8cde]\n\n"
-            "[white]Model:[/white]      [#9aa0b8]" + os.getenv("DEFAULT_MODEL", "?").split("/")[-1] + "[/#9aa0b8]\n"
-            "[white]Workspace:[/white]  [#3e4560]" + os.getenv("WORKSPACE_DIR", ".") + "[/#3e4560]\n"
-            "[white]Session:[/white]    [#febc2e]#" + str(self.session_id) + "[/#febc2e]\n\n"
-            "[dim]┌─ Quick Start ─────────────────────────────┐[/dim]\n"
-            "[dim]│[/dim]  [#7b8cde]/[/#7b8cde]              show slash commands\n"
-            "[dim]│[/dim]  [italic]'list files in agent/'[/italic]      natural lang\n"
-            "[dim]│[/dim]  [italic]'where is the ReAct loop?'[/italic]  semantic search\n"
-            "[dim]└───────────────────────────────────────────┘[/dim]",
-            title="[bold #7b8cde]◢ SYSTEM ONLINE ◣[/bold #7b8cde]",
-            border_style="#7b8cde",
+            welcome_content,
+            title="[bold #8b5cf6]◢ OBLIVION AI ◣[/bold #8b5cf6]",
+            border_style="#8b5cf6",
+            padding=(1, 2),
+        ))
+
+        # Recent activity panel
+        if recent_sessions_text:
+            log.write(Panel(
+                recent_sessions_text + "\n\n[dim #7c8399]... Ctrl+G for full history[/dim #7c8399]",
+                title="[bold #22d3ee]◢ RECENT ACTIVITY ◣[/bold #22d3ee]",
+                border_style="#22d3ee",
+                padding=(0, 2),
+            ))
+
+        # Quick tips panel
+        log.write(Panel(
+            "[#a78bfa]/[/#a78bfa]           [dim]show slash commands[/dim]\n"
+            "[#a78bfa]Ctrl+T[/#a78bfa]      [dim]talk to Meera (voice)[/dim]\n"
+            "[#a78bfa]Ctrl+G[/#a78bfa]      [dim]session history[/dim]\n"
+            "[#a78bfa]Ctrl+Q[/#a78bfa]      [dim]quit[/dim]",
+            title="[bold #67e8f9]◢ QUICK START ◣[/bold #67e8f9]",
+            border_style="#67e8f9",
+            padding=(0, 2),
         ))
 
     def _animate_tick(self) -> None:
@@ -939,6 +1051,16 @@ class OblivionApp(App):
         tree = self.query_one("#workspace-tree", Tree)
         tree.clear()
         root = tree.root
+
+        # Update root label to show current workspace name
+        try:
+            import os as _os
+            ws_path = Path(_os.environ.get("WORKSPACE_DIR", ".")).expanduser().resolve()
+            ws_name = ws_path.name or str(ws_path)
+            root.label = f"◆ {ws_name}/"
+        except Exception:
+            pass
+
         root.expand()
 
         workspace = Path(os.getenv("WORKSPACE_DIR", ".")).expanduser().resolve()
@@ -1013,6 +1135,45 @@ class OblivionApp(App):
                 log.write(Panel(result, title="[#7b8cde]/auto " + sub + "[/#7b8cde]", border_style="#3e4560"))
             except Exception as e:
                 log.write(f"Error: {e}")
+            return True
+
+        if command == "/rates":
+            # Show detailed rate limit status
+            try:
+                exh = self.agent.llm.get_exhausted_models()
+                from agent.models import MODELS, get_rate_delay
+                from agent.llm import FALLBACK_CHAIN
+
+                lines = ["[bold #67e8f9]═══ RATE LIMIT STATUS ═══[/bold #67e8f9]", ""]
+
+                lines.append("[bold]Fallback Chain (in order):[/bold]")
+                for i, mid in enumerate(FALLBACK_CHAIN, 1):
+                    is_exhausted = any(e["model"] == mid for e in exh)
+                    status = "[red]⏸ exhausted[/red]" if is_exhausted else "[green]✓ available[/green]"
+                    delay = get_rate_delay(mid)
+                    rpm = int(60 / delay) if delay > 0 else "unlimited"
+                    lines.append(f"  {i}. {mid[:45]:<45}  {status}  ({rpm} RPM)")
+
+                if exh:
+                    lines.append("")
+                    lines.append("[bold]Currently rate-limited:[/bold]")
+                    for e in exh:
+                        mins = e["retry_in"] // 60
+                        secs = e["retry_in"] % 60
+                        ctype = e.get("cooldown_type", "default")
+                        lines.append(
+                            f"  • {e['model']:<45}  retry in {mins}m {secs}s  [{ctype}]"
+                        )
+
+                lines.append("")
+                lines.append("[bold]Current model:[/bold]  " + os.getenv("DEFAULT_MODEL", "?"))
+                last_used = getattr(self.agent.llm, "last_used_model", None)
+                if last_used and last_used != os.getenv("DEFAULT_MODEL"):
+                    lines.append(f"[bold]Last actually used:[/bold]  {last_used}")
+
+                log.write("\n".join(lines))
+            except Exception as e:
+                log.write(f"[red]Error getting rate status: {e}[/red]")
             return True
 
         if command == "/help":
@@ -2537,10 +2698,22 @@ def main():
     except Exception as _e:
         print(f"[Oblivion] Setup wizard skipped: {_e}")
 
-    # Pre-load Whisper model BEFORE Textual takes over the terminal.
-    # This avoids multiprocessing/fds_to_keep errors when loading inside async.
+    # Restore last workspace from previous session (if valid).
+    # Config loading may set WORKSPACE_DIR initially; this overrides it with the last active dir.
+    try:
+        from agent.paths import load_last_workspace
+        _last_ws = load_last_workspace()
+        if _last_ws:
+            os.environ["WORKSPACE_DIR"] = _last_ws
+    except Exception:
+        pass
+
+    # Whisper is now loaded LAZILY on first Ctrl+T press instead of at startup.
+    # This shaves ~5-10 seconds off boot time. First voice press has a small
+    # one-time delay (~3-5s) while the model loads, then it's cached.
+    # Users can opt back into preload with OBLIVION_PRELOAD_VOICE=1.
     import os
-    if os.getenv("OBLIVION_PRELOAD_VOICE", "1") == "1" and VOICE_AVAILABLE:
+    if os.getenv("OBLIVION_PRELOAD_VOICE", "0") == "1" and VOICE_AVAILABLE:
         try:
             print("[Oblivion] Pre-loading Whisper model (one-time)...")
             get_whisper_model()

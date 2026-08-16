@@ -11,7 +11,7 @@ from typing import Callable, Optional
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
-from agent.rag import index_single_file, should_index, WORKSPACE
+from agent.rag import index_single_file, should_index, _get_workspace
 
 
 class CodeChangeHandler(FileSystemEventHandler):
@@ -99,7 +99,7 @@ class FileWatcher:
     """
 
     def __init__(self, workspace: Path = None, callback: Optional[Callable] = None):
-        self.workspace = workspace or WORKSPACE
+        self.workspace = workspace or _get_workspace()
         self.callback = callback
         self.observer: Optional[Observer] = None
 

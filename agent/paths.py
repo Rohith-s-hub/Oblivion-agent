@@ -233,3 +233,32 @@ def describe() -> dict:
 if __name__ == "__main__":
     import json
     print(json.dumps(describe(), indent=2))
+
+
+def last_workspace_file():
+    """Path to file that stores the last active workspace."""
+    return oblivion_home() / "last_workspace.txt"
+
+
+def save_last_workspace(workspace_path: str) -> None:
+    """Persist the last active workspace so it can be restored on next launch."""
+    try:
+        f = last_workspace_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(str(workspace_path))
+    except Exception:
+        pass
+
+
+def load_last_workspace() -> str | None:
+    """Load the last active workspace path if it exists and is still valid."""
+    try:
+        from pathlib import Path
+        f = last_workspace_file()
+        if f.exists():
+            ws = f.read_text().strip()
+            if ws and Path(ws).exists() and Path(ws).is_dir():
+                return ws
+    except Exception:
+        pass
+    return None

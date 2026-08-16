@@ -16,25 +16,44 @@ litellm.drop_params = True
 # ── Fallback config ─────────────────────────────────────────────────────────
 # Order: primary (whatever DEFAULT_MODEL is) → these in sequence
 FALLBACK_CHAIN = [
-    # PRIMARY: Groq Llama 3.3 - 30k TPM handles Oblivion's ~9500 token prompts
-    "groq/llama-3.3-70b-versatile",
-    # SECONDARY: Gemini 2.5 Flash - 1M context, reliable
-    "gemini/gemini-2.5-flash",
-    # TERTIARY: Coding-specialized
-    # QUATERNARY: Groq gpt-oss-120b - better coder BUT 8k TPM limits Oblivion prompts
-    "groq/openai/gpt-oss-120b",
-    # LOCAL: 262K ctx, tools + thinking, works OFFLINE
-    "ollama/qwen3.5:4b",
-    # OpenRouter free tier
-    "openrouter/openai/gpt-oss-20b:free",
+    # ═══ TIER 1: PROVEN FREE PRIMARY ═══════════════════════════════════
+    # Only remaining FREE Ollama Cloud model (verified Aug 2026)
+    # 32.7B params, 256K ctx, vision+tools, no rate limits
+    "ollama/gemma4:31b-cloud",           # ⭐ THE WINNER
+
+    # ═══ TIER 2: FAST FREE CLOUD APIs ══════════════════════════════════
+    # Free tiers with generous per-minute limits
+    "gemini/gemini-2.5-flash",           # 1M ctx, 250/day
+    "groq/llama-3.3-70b-versatile",      # 30 RPM, blazing fast
+
+    # ═══ TIER 3: OPENROUTER FREE ═══════════════════════════════════════
+    # Backup free cloud when others rate-limited
     "openrouter/google/gemma-4-31b-it:free",
-    # LAST RESORT: unreliable free tiers when everything else fails
-    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-    "cerebras/llama-3.3-70b",
+    "openrouter/openai/gpt-oss-20b:free",
+
+    # ═══ TIER 4: LOCAL SAFETY NET ══════════════════════════════════════
+    # Always works, no internet needed
+    "ollama/qwen3.5:4b",
+
+    # ═══ REMOVED (verified dead/paid Aug 2026) ═════════════════════════
+    # - ollama/qwen3-coder:480b-cloud    RETIRED 2026-07-15
+    # - ollama/qwen3.5:397b-cloud        PAID subscription required
+    # - ollama/glm-5.2:cloud              PAID subscription required
+    # - groq/openai/gpt-oss-120b          8K TPM too small
+    # - cerebras/*                        needs paid API key
+    # - nvidia/nemotron-3-ultra           too slow, unreliable
 ]
 
 # How long to keep a model "exhausted" before retrying (seconds)
-EXHAUSTION_COOLDOWN = 1800  # 30 minutes cooldown before retrying exhausted models
+# Different cooldowns for different error types (based on 2025 limits)
+COOLDOWN_QUOTA_DAY = 3600 * 4   # 4 hours (daily quota)
+COOLDOWN_QUOTA_MIN = 60         # 1 minute (per-minute limit)
+COOLDOWN_SERVICE_DOWN = 120     # 2 minutes (503, overloaded)
+COOLDOWN_AUTH = 3600 * 24       # 24 hours (bad API key - rare fix needed)
+COOLDOWN_DEFAULT = 300          # 5 minutes (fallback)
+
+# Legacy name for backward compat
+EXHAUSTION_COOLDOWN = COOLDOWN_DEFAULT
 
 # Errors that trigger fallback (case-insensitive substring match)
 RETRYABLE_ERROR_HINTS = [
@@ -46,6 +65,9 @@ RETRYABLE_ERROR_HINTS = [
     # Auth errors — likely stale/wrong key for THIS model; try next
     "401", "unauthenticated", "invalid api key", "invalid_api_key",
     "permission denied", "access_token_type_unsupported",
+    # Model output errors — model got confused, try a different one
+    "tool_use_failed", "invalid literal for int",
+    "invalid json", "malformed", "bad_response",
 ]
 
 
@@ -70,7 +92,15 @@ def _short_error(err: Exception) -> str:
     if "connect" in msg_lower or "network" in msg_lower:
         return "network error"
     if "401" in msg or "api key" in msg_lower or "authentication" in msg_lower or "unauthenticated" in msg_lower:
-        return "invalid or missing API key"
+        return "missing API key (skipping)"
+    if "missing credentials" in msg_lower:
+        return "no API key configured"
+    if "tool_use_failed" in msg_lower or "invalid literal for int" in msg_lower:
+        return "model output error"
+    if "invalid json" in msg_lower or "malformed" in msg_lower:
+        return "malformed model output"
+    if "request too large" in msg_lower or "tpm" in msg_lower:
+        return "prompt too large for this model tier"
     if "500" in msg or "502" in msg or "504" in msg or "internal server" in msg_lower:
         return "provider server error"
     # Truncate and strip any JSON/dict garbage
@@ -90,7 +120,7 @@ class LLMClient:
     on_fallback_notify: Optional[Callable[[str], None]] = None
 
     def __init__(self):
-        self.max_tokens = int(os.getenv("MAX_TOKENS", "4096"))
+        self.max_tokens = int(os.getenv("MAX_TOKENS", "8192"))
         self.temperature = float(os.getenv("TEMPERATURE", "0.1"))
         self.total_input_tokens = 0
         self.total_output_tokens = 0
@@ -111,17 +141,34 @@ class LLMClient:
 
     # ── Exhaustion tracking ─────────────────────────────────────────────────
     @classmethod
-    def _mark_exhausted(cls, model: str) -> None:
-        cls._exhausted[model] = time.time()
+    def _mark_exhausted(cls, model: str, error: Exception = None) -> None:
+        """Mark model exhausted with smart cooldown based on error type."""
+        # Determine cooldown based on error
+        cooldown = COOLDOWN_DEFAULT
+        if error:
+            msg = str(error).lower()
+            if "quota" in msg and ("day" in msg or "daily" in msg):
+                cooldown = COOLDOWN_QUOTA_DAY
+            elif "rate limit" in msg or "429" in msg or "per minute" in msg:
+                cooldown = COOLDOWN_QUOTA_MIN
+            elif "503" in msg or "overloaded" in msg or "unavailable" in msg:
+                cooldown = COOLDOWN_SERVICE_DOWN
+            elif "401" in msg or "api key" in msg or "authentication" in msg:
+                cooldown = COOLDOWN_AUTH
+        cls._exhausted[model] = (time.time(), cooldown)
 
     @classmethod
     def _is_exhausted(cls, model: str) -> bool:
-        """True if model was marked exhausted within the cooldown window."""
-        ts = cls._exhausted.get(model)
-        if ts is None:
+        """True if model was marked exhausted within its cooldown window."""
+        entry = cls._exhausted.get(model)
+        if entry is None:
             return False
-        if time.time() - ts > EXHAUSTION_COOLDOWN:
-            # Cooldown expired — give it another shot
+        # Handle both old (timestamp) and new (tuple) formats
+        if isinstance(entry, tuple):
+            ts, cooldown = entry
+        else:
+            ts, cooldown = entry, EXHAUSTION_COOLDOWN
+        if time.time() - ts > cooldown:
             del cls._exhausted[model]
             return False
         return True
@@ -151,6 +198,21 @@ class LLMClient:
 
     # ── Core: call one specific model (no fallback logic) ───────────────────
     def _call_model(self, model: str, messages: list, on_token=None) -> str:
+        self.last_used_model = model  # track for status bar
+
+        # Build extra kwargs for Ollama models (they need special options)
+        extra = {}
+        if model.startswith("ollama/"):
+            # Ollama needs these in an "options" dict for full context/generation
+            extra = {
+                "num_predict": self.max_tokens,   # respect our max_tokens
+                "num_ctx": 32768,                 # use large context window
+            }
+            # Set timeout longer for large cloud models
+            timeout_val = 180 if "cloud" in model else 120
+        else:
+            timeout_val = 90
+
         if on_token:
             # TRUE streaming: token by token, not dump-at-end
             response = litellm.completion(
@@ -159,7 +221,8 @@ class LLMClient:
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
                 stream=True,
-                timeout=90,
+                timeout=timeout_val,
+                **extra,
             )
             full = ""
             for chunk in response:
@@ -186,7 +249,8 @@ class LLMClient:
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
                 stream=False,
-                timeout=90,
+                timeout=timeout_val,
+                **extra,
             )
             full = response.choices[0].message.content or ""
             # Use real token counts if available
@@ -227,11 +291,30 @@ class LLMClient:
                     # Non-retryable error (e.g. bad request, auth) — stop trying
                     raise
 
-                # Retryable — mark exhausted, try next
-                self._mark_exhausted(model)
+                # Retryable — mark exhausted with smart cooldown, try next
+                self._mark_exhausted(model, e)
                 short = model.split("/")[-1][:30]
                 err_brief = _short_error(e)
                 self._notify(short + " " + err_brief + " - trying next...")
+
+                # TASK RECAP: on first fallback, inject a system message
+                # so the new model doesn't confuse current task with earlier context
+                if failed_count == 1 and len(messages) > 4:
+                    last_user_msg = None
+                    for msg in reversed(messages):
+                        if msg.get("role") == "user":
+                            c = msg.get("content", "")
+                            if isinstance(c, str) and 10 < len(c) < 500:
+                                last_user_msg = c
+                                break
+                    if last_user_msg:
+                        messages = messages + [{
+                            "role": "system",
+                            "content": (
+                                f"[MODEL SWITCHED: Continue with the CURRENT task only: "
+                                f"{last_user_msg[:200]}. Do NOT restart from earlier context.]"
+                            )
+                        }]
                 continue
 
         # All models exhausted
@@ -295,15 +378,26 @@ class LLMClient:
         """Return list of currently exhausted models with seconds-until-retry."""
         now = time.time()
         out = []
-        for model, ts in list(LLMClient._exhausted.items()):
+        for model, entry in list(LLMClient._exhausted.items()):
+            if isinstance(entry, tuple):
+                ts, cooldown = entry
+            else:
+                ts, cooldown = entry, EXHAUSTION_COOLDOWN
             elapsed = now - ts
-            if elapsed > EXHAUSTION_COOLDOWN:
+            if elapsed > cooldown:
                 del LLMClient._exhausted[model]
                 continue
             out.append({
                 "model": model,
                 "exhausted_for": int(elapsed),
-                "retry_in": int(EXHAUSTION_COOLDOWN - elapsed),
+                "retry_in": int(cooldown - elapsed),
+                "cooldown_type": (
+                    "quota-day" if cooldown >= 3600 else
+                    "auth" if cooldown >= 3600 * 24 else
+                    "service" if cooldown == COOLDOWN_SERVICE_DOWN else
+                    "quota-min" if cooldown == COOLDOWN_QUOTA_MIN else
+                    "default"
+                ),
             })
         return out
 

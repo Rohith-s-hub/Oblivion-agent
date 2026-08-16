@@ -57,13 +57,32 @@ SKIP_DIRS = {
     ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
     "coverage", "htmlcov", ".coverage",
     ".idea", ".vscode", "__MACOSX",
-    "logs", "tmp", "temp", "cache",
+    "logs", "tmp", "temp", "cache", ".cache",
+    # System/config dirs
+    ".oblivion", ".config", ".local", ".mozilla", ".thunderbird",
+    ".ssh", ".gnupg", ".steam", ".wine", ".dbus",
+    "snap", ".snap", ".gvfs", ".pki", ".java",
+    "Trash", ".Trash", ".Trash-1000",
+    # Package manager caches
+    ".npm", ".yarn", ".pnpm", ".pip", ".cargo", ".rustup",
+    ".m2", ".gradle", ".android", ".docker",
+    # Browser data
+    ".mozilla", ".chrome", "google-chrome", ".chromium",
 }
 
 SKIP_FILE_PATTERNS = {
     "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock",
     "poetry.lock", "Cargo.lock", "Gemfile.lock", "composer.lock",
 }
+
+# File patterns to always skip (regex-like)
+SKIP_FILE_PREFIXES = ("todelete_", ".", "chroma.sqlite")
+SKIP_FILE_SUFFIXES = (".log", ".journal", ".db-journal", ".sqlite3-journal",
+                       ".pyc", ".pyo", ".so", ".dylib", ".dll", ".exe",
+                       ".zip", ".tar.gz", ".rar", ".7z",
+                       ".jpg", ".jpeg", ".png", ".gif", ".webp", ".ico",
+                       ".mp3", ".mp4", ".mov", ".avi", ".mkv",
+                       ".pdf", ".doc", ".docx", ".xls", ".xlsx")
 
 MAX_FILE_SIZE = 100_000
 
@@ -161,7 +180,7 @@ def chunk_file(content: str, filename: str, max_lines: int = 50) -> list[dict]:
     PLUS extra keys consumers can use:
       {type, name, signature, parent, docstring, _chunk_obj}
     """
-    chunks = chunk_code(content, filename, max_lines=max_lines)
+    chunks = chunk_code(content, filename)
     out = []
     for c in chunks:
         out.append({
@@ -181,6 +200,12 @@ def chunk_file(content: str, filename: str, max_lines: int = 50) -> list[dict]:
 
 def should_index(path: Path) -> bool:
     if path.name in SKIP_FILE_PATTERNS:
+        return False
+    # Skip files with junky prefixes (todelete_, hidden files, chroma internals)
+    if any(path.name.startswith(p) for p in SKIP_FILE_PREFIXES):
+        return False
+    # Skip files with binary/junk suffixes
+    if any(path.name.endswith(s) for s in SKIP_FILE_SUFFIXES):
         return False
     if path.suffix not in INDEXABLE_EXTENSIONS:
         return False

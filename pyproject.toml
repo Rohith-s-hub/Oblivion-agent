@@ -1,6 +1,6 @@
 [project]
 name = "oblivion-agent"
-version = "3.0.0"
+version = "3.1.0"
 description = "OBLIVION - Terminal AI coding agent with voice, RAG, and multi-model support. Powered by Meera."
 readme = "README.md"
 license = {text = "MIT"}

@@ -278,3 +278,114 @@ def new_workspace(name: str, location: str = "") -> str:
         pass
 
     return f"Workspace {action}: {new_ws}\nName: {name}\nThe UI workspace panel will refresh automatically. All subsequent file operations will use this new workspace."
+
+
+def switch_workspace(path: str) -> str:
+    """Switch the active workspace to an EXISTING folder.
+    
+    Use this when user says:
+      - "go into <folder>"
+      - "switch to <folder>"
+      - "work in <folder>"
+      - "cd to <folder>"
+      - "change directory to <folder>"
+    
+    The path can be:
+      - Absolute: /home/rohit/Projects/myapp
+      - Relative to home: ~/Projects/myapp OR Projects/myapp
+      - Just a folder name in current workspace parent: myapp
+      - Relative to current workspace: subfolder
+    
+    Returns success message with new workspace path.
+    """
+    import os
+    from pathlib import Path
+    
+    if not path or not path.strip():
+        return "Error: workspace path cannot be empty."
+    
+    path = path.strip()
+    current_ws = Path(os.getenv("WORKSPACE_DIR", ".")).expanduser().resolve()
+    
+    # Try multiple resolution strategies
+    candidates = []
+    
+    # 1. If absolute path
+    if path.startswith("/"):
+        candidates.append(Path(path))
+    
+    # 2. Expand ~ (home)
+    if path.startswith("~"):
+        candidates.append(Path(path).expanduser())
+    
+    # 3. Relative to current workspace
+    candidates.append(current_ws / path)
+    
+    # 4. Relative to current workspace parent (for "go into sibling folder")
+    candidates.append(current_ws.parent / path)
+    
+    # 5. Under ~/Projects/ (most common location)
+    candidates.append(Path.home() / "Projects" / path)
+    
+    # 6. Under home
+    candidates.append(Path.home() / path)
+    
+    # Find first candidate that exists and is a directory
+    target = None
+    for c in candidates:
+        try:
+            resolved = c.resolve()
+            if resolved.exists() and resolved.is_dir():
+                target = resolved
+                break
+        except Exception:
+            continue
+    
+    if target is None:
+        # Show what we tried AND list actual available folders
+        tried = "\n  ".join(str(c) for c in candidates[:4])
+
+        # List real folders in likely parents so Meera can pick the right one
+        available = []
+        for parent in [current_ws, current_ws.parent, Path.home() / "Projects", Path.home()]:
+            try:
+                if parent.exists():
+                    dirs = [d.name for d in parent.iterdir()
+                            if d.is_dir() and not d.name.startswith(".")]
+                    if dirs:
+                        available.append(f"  In {parent}: {', '.join(sorted(dirs)[:15])}")
+            except Exception:
+                pass
+
+        avail_text = "\n".join(available[:3]) if available else "  (none found)"
+        return (
+            f"Error: could not find folder '{path}'.\n"
+            f"Tried:\n  {tried}\n\n"
+            f"Available folders:\n{avail_text}\n\n"
+            f"Use switch_workspace with an EXACT name from above, "
+            f"or create_dir to make a new one first."
+        )
+    
+    # Safety: don't allow switching to obviously dangerous paths
+    dangerous = ["/", "/etc", "/boot", "/sys", "/proc", "/root", "/usr", "/bin"]
+    if str(target) in dangerous:
+        return f"Error: refusing to switch to system directory {target}"
+    
+    # Switch workspace
+    os.environ["WORKSPACE_DIR"] = str(target)
+
+    # Persist so next launch restores this workspace
+    try:
+        from agent.paths import save_last_workspace
+        save_last_workspace(str(target))
+    except Exception:
+        pass
+
+    # Reset RAG collection so searches use the new workspace immediately
+    try:
+        from agent.rag import get_collection
+        get_collection(force_reset=True)
+    except Exception:
+        pass
+    
+    return f"[OK] Workspace switched to: {target}"

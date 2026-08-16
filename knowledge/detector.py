@@ -59,17 +59,21 @@ def detect_tech_stack(workspace: str = None) -> Set[str]:
 
 
     # Detect TypeScript from .ts/.tsx file presence (catches projects without tsconfig)
+    _SKIP_DIRS_TS = {
+        "node_modules", "dist", "build", ".venv", "venv",
+        "site-packages", "__pycache__", ".git", ".chroma",
+        "vendor", "target", "out", ".next", ".nuxt",
+    }
     if "typescript" not in tags:
         try:
             for p in ws.rglob("*.ts"):
-                # skip node_modules and dist
-                if "node_modules" in p.parts or "dist" in p.parts or ".venv" in p.parts:
+                if any(part in _SKIP_DIRS_TS for part in p.parts):
                     continue
                 tags.add("typescript")
                 break
             if "typescript" not in tags:
                 for p in ws.rglob("*.tsx"):
-                    if "node_modules" in p.parts or "dist" in p.parts:
+                    if any(part in _SKIP_DIRS_TS for part in p.parts):
                         continue
                     tags.add("typescript")
                     break
@@ -97,6 +101,20 @@ def detect_tech_stack(workspace: str = None) -> Set[str]:
 
     if list(ws.rglob("*.py"))[:3]:
         tags.add("python_general")
+
+    # ── Web dev detection (only if HTML/CSS at workspace ROOT or src/) ──────
+    # Deep nested HTML (like in mcp_server/ui/) doesn't count as "this is a
+    # web project". Only files at root or in obvious web folders trigger it.
+    _WEB_ROOT_HINTS = ["index.html", "main.css", "styles.css", "style.css",
+                        "app.css", "public/index.html", "src/index.html",
+                        "src/App.css", "src/index.css"]
+    try:
+        for hint in _WEB_ROOT_HINTS:
+            if (ws / hint).exists():
+                tags.add("webdev")
+                break
+    except Exception:
+        pass
 
     return tags
 
@@ -126,6 +144,7 @@ def detect_from_request(user_message: str) -> Set[str]:
         "security":   ["security", "auth", "authentication", "authorization", "jwt", "oauth", "password", "hash", "bcrypt", "argon2", "csrf", "xss", "sql injection", "owasp", "secret", "token", "vulnerability", "encrypt", "permission", "rbac", "session", "cookie", "cors", "https", "ssl", "tls", "exploit", "attack", "sanitize", "escape"],
         "testing":    ["test", "tests", "pytest", "vitest", "jest", "unit test", "integration test", "fixture", "mock", "coverage", "tdd", "assertion", "spec"],
         "database":   ["sql", "postgres", "postgresql", "sqlite", "alembic", "migration", "index", "query", "n+1", "deadlock", "schema", "table", "jsonb", "foreign key", "transaction"],
+        "webdev":     ["website", "landing page", "web app", "webapp", "web site", "site", "portfolio", "homepage", "web page", "ecommerce", "e-commerce", "online store", "shop", "blog", "dashboard", "ui", "ux", "design", "responsive", "html", "css", "javascript", "frontend", "front-end", "static site", "static website", "html5", "css3", "single page", "spa"],
     }
 
     for tag, keywords in keyword_map.items():
@@ -160,6 +179,8 @@ def describe_stack(tags: Set[str]) -> str:
         parts.append("FastAPI")
     if "frappe" in tags:
         parts.append("Frappe")
+    if "webdev" in tags and not parts:
+        parts.append("Web (HTML/CSS/JS)")
     if not parts:
         return "(general)"
     return " + ".join(parts)
