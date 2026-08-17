@@ -28,10 +28,11 @@ except ImportError as _e:
 SAMPLE_RATE = 16000
 CHANNELS = 1
 DTYPE = "int16"
-MAX_RECORD_SECONDS = 60
-SILENCE_THRESHOLD = 1200  # higher = tolerates more background noise
-SILENCE_DURATION = 1.2  # stop quicker once you stop talking
-MIN_RECORD_SECONDS = 0.8
+# All voice params are env-configurable via ~/.oblivion/config.env
+MAX_RECORD_SECONDS = int(os.getenv("VOICE_MAX_RECORD", "60"))
+SILENCE_THRESHOLD = int(os.getenv("VOICE_SILENCE_THRESHOLD", "1200"))  # higher = tolerates more noise
+SILENCE_DURATION = float(os.getenv("VOICE_SILENCE_DURATION", "3.0"))  # 3s pause = auto-stop
+MIN_RECORD_SECONDS = float(os.getenv("VOICE_MIN_RECORD", "0.8"))  # min duration before silence check
 
 from agent.paths import whisper_dir
 MODEL_DIR = whisper_dir()

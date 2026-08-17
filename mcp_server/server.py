@@ -30,8 +30,18 @@ import sys
 from typing import Any
 
 # Load Oblivion config so paths + workspace work the same as in TUI
-from agent.paths import load_config_env
+from agent.paths import load_config_env, load_last_workspace
 load_config_env()
+
+# If WORKSPACE_DIR not explicitly set by client (Claude Desktop passes it),
+# fall back to the last workspace user was in via TUI
+import os as _osw
+if not _osw.environ.get("WORKSPACE_DIR"):
+    _last = load_last_workspace()
+    if _last:
+        _osw.environ["WORKSPACE_DIR"] = _last
+        print(f"[oblivion-mcp] restored workspace: {_last}", file=__import__("sys").stderr)
+
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server

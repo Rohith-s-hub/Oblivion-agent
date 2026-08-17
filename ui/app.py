@@ -156,6 +156,12 @@ SLASH_COMMANDS = SLASH_COMMANDS[:0] + [
     ("/trust reset",  "Clear trust list (all mutations prompt again)"),
     ("/auto",         "Toggle AUTO mode (mutations auto-approve, destructive still prompt)"),
     ("/auto --persist", "AUTO mode saved to config.env across restarts"),
+    ("/wake",              "Wake word status (hey Jarvis detection)"),
+    ("/wake on",           "Enable wake word listener"),
+    ("/wake off",          "Disable wake word listener"),
+    ("/wake status",       "Show wake word status"),
+    ("/wake sensitivity 0.5", "Adjust wake word sensitivity (0.0-1.0)"),
+    ("/rates",             "Show LLM rate limits + fallback chain status"),
     ("/switch",       "Switch to 8085 Microprocessor Simulator"),
     ("/quit",         "Exit Oblivion"),
     ("/update",       "Check PyPI for newer Oblivion version"),
@@ -827,6 +833,14 @@ class OblivionApp(App):
         if self.auto_watch_enabled:
             self._start_watcher()
 
+        # Start wake word detector if enabled in config
+        try:
+            import os as _osw
+            if _osw.environ.get("WAKE_WORD_ENABLED", "false").lower() == "true":
+                self._start_wake_word()
+        except Exception:
+            pass
+
         # Process watcher events every 500ms
         self.set_interval(0.5, self._drain_watcher_events)
 
@@ -1135,6 +1149,82 @@ class OblivionApp(App):
                 log.write(Panel(result, title="[#7b8cde]/auto " + sub + "[/#7b8cde]", border_style="#3e4560"))
             except Exception as e:
                 log.write(f"Error: {e}")
+            return True
+
+        if command == "/wake":
+            # Manage wake word detection
+            arg_lower = arg.lower().strip()
+            try:
+                from agent.wake_word import (
+                    is_available, is_wake_word_enabled, get_status,
+                    disable_wake_word,
+                )
+            except ImportError:
+                log.write(
+                    "[#febc2e]⚠ Wake word module unavailable.[/#febc2e] "
+                    "Install: [bold]uv pip install openwakeword[/bold]"
+                )
+                return True
+
+            if not is_available():
+                log.write(
+                    "[#febc2e]⚠ openwakeword not installed.[/#febc2e]\n"
+                    "Install: [bold]uv pip install openwakeword[/bold]"
+                )
+                return True
+
+            if not arg_lower or arg_lower == "status":
+                st = get_status()
+                lines = ["[bold #67e8f9]═══ WAKE WORD STATUS ═══[/bold #67e8f9]", ""]
+                lines.append(f"[bold]Listening:[/bold]    " +
+                             ("[green]● YES[/green]" if st["listening"] else "[dim]○ no[/dim]"))
+                lines.append(f"[bold]Wake words:[/bold]  {', '.join(st['wake_words'])}")
+                lines.append(f"[bold]Sensitivity:[/bold] {st['sensitivity']}")
+                lines.append("")
+                lines.append(f"[dim]Available models: {', '.join(st['available_models'])}[/dim]")
+                lines.append("")
+                lines.append("[dim]Commands:[/dim]")
+                lines.append("[dim]  /wake on          - enable listening[/dim]")
+                lines.append("[dim]  /wake off         - disable listening[/dim]")
+                lines.append("[dim]  /wake sensitivity 0.7  - adjust (0.0-1.0)[/dim]")
+                log.write("\n".join(lines))
+                return True
+
+            if arg_lower == "on":
+                if is_wake_word_enabled():
+                    log.write("[#7c8399]Wake word already active[/#7c8399]")
+                else:
+                    started = self._start_wake_word()
+                    if not started:
+                        log.write("[#febc2e]⚠ Failed to start wake word[/#febc2e]")
+                return True
+
+            if arg_lower == "off":
+                disable_wake_word()
+                log.write("[#7c8399]🎤 Wake word disabled[/#7c8399]")
+                return True
+
+            if arg_lower.startswith("sensitivity "):
+                try:
+                    val = float(arg_lower.split(" ", 1)[1].strip())
+                    if 0.0 <= val <= 1.0:
+                        import os as _os
+                        _os.environ["WAKE_WORD_SENSITIVITY"] = str(val)
+                        # Update env file too
+                        try:
+                            self._update_env("WAKE_WORD_SENSITIVITY", str(val))
+                        except Exception:
+                            pass
+                        log.write(f"[#67e8f9]✓ Sensitivity set to {val}[/#67e8f9]")
+                        log.write("[dim]Restart wake word with /wake off then /wake on[/dim]")
+                    else:
+                        log.write("[#febc2e]Sensitivity must be 0.0 to 1.0[/#febc2e]")
+                except ValueError:
+                    log.write("[#febc2e]Invalid number. Example: /wake sensitivity 0.7[/#febc2e]")
+                return True
+
+            log.write(f"[#febc2e]Unknown /wake action: {arg}[/#febc2e]")
+            log.write("[dim]Use: /wake, /wake on, /wake off, /wake sensitivity 0.7[/dim]")
             return True
 
         if command == "/rates":
@@ -2468,6 +2558,68 @@ class OblivionApp(App):
     def action_show_help(self) -> None:
         self.run_worker(self.handle_slash("/help"), exclusive=False)
 
+    def _start_wake_word(self) -> bool:
+        """Start background wake word listener ("hey Jarvis" → record)."""
+        try:
+            from agent.wake_word import enable_wake_word, is_available
+        except ImportError:
+            return False
+
+        if not is_available():
+            log = self.query_one("#chat-log", RichLog)
+            log.write(
+                "[#febc2e]⚠  Wake word requires openwakeword.[/#febc2e] "
+                "Install: [bold]uv pip install openwakeword[/bold]"
+            )
+            return False
+
+        def _on_wake_from_thread():
+            """Called from wake word thread when "hey Jarvis" detected."""
+            def _trigger():
+                # Meera says "Yes?"
+                try:
+                    from agent import friday
+                    if friday.is_enabled():
+                        friday.speak("Yes?")
+                except Exception:
+                    pass
+                # Then trigger voice recording (same as Ctrl+T)
+                if not self.voice_recording:
+                    self.run_worker(self._start_voice_recording(), exclusive=False)
+            # Must schedule on main thread (Textual not thread-safe)
+            self.call_from_thread(_trigger)
+
+        def _on_wake_error(msg: str):
+            def _log():
+                try:
+                    log = self.query_one("#chat-log", RichLog)
+                    log.write(f"[#febc2e]⚠ wake word: {msg}[/#febc2e]")
+                except Exception:
+                    pass
+            self.call_from_thread(_log)
+
+        started = enable_wake_word(
+            on_wake=_on_wake_from_thread,
+            on_error=_on_wake_error,
+        )
+
+        if started:
+            log = self.query_one("#chat-log", RichLog)
+            log.write(
+                "[#67e8f9]🎤 Wake word active - say 'hey Jarvis' to talk[/#67e8f9]"
+            )
+        return started
+
+    def _stop_wake_word(self) -> None:
+        """Stop background wake word listener."""
+        try:
+            from agent.wake_word import disable_wake_word
+            disable_wake_word()
+            log = self.query_one("#chat-log", RichLog)
+            log.write("[#7c8399]🎤 Wake word disabled[/#7c8399]")
+        except Exception:
+            pass
+
     def action_toggle_voice(self) -> None:
         """Ctrl+T hotkey - start/stop voice recording."""
         if not VOICE_AVAILABLE:
@@ -2515,13 +2667,15 @@ class OblivionApp(App):
                 recorder = VoiceRecorder(on_level=on_level, on_status=on_status)
                 self.voice_recorder = recorder
 
-                # Watch for stop event
+                # Watch for stop event (allows Ctrl+T manual stop)
                 def watch_stop():
                     self.voice_stop_event.wait()
                     recorder.stop()
                 threading.Thread(target=watch_stop, daemon=True).start()
 
-                audio = recorder.record_until_stopped()
+                # Use record() with silence detection (auto-stops after silence)
+                # Users can still manually stop with Ctrl+T
+                audio = recorder.record()
 
                 if len(audio) == 0:
                     self.call_from_thread(self._apply_transcription, "")
@@ -2591,18 +2745,33 @@ class OblivionApp(App):
             log.write("[dim]No speech detected.[/dim]")
             return
 
-        # Fill input box with transcription (user reviews + presses Enter)
-        input_widget.value = text.strip()
-        input_widget.cursor_position = len(input_widget.value)
-        input_widget.focus()
+        # Auto-submit the transcribed text (recording already stopped on silence)
+        clean_text = text.strip()
 
         log.write(Panel(
-            f"[#7b8cde]\"{text.strip()}\"[/#7b8cde]\n\n"
-            "[dim]Review the text above and press [bold #7b8cde]Enter[/bold #7b8cde] to submit, "
-            "or edit it first.[/dim]",
+            f"[#7b8cde]\"{clean_text}\"[/#7b8cde]",
             title="[#7b8cde]◢ TRANSCRIBED ◣[/#7b8cde]",
             border_style="#7b8cde",
         ))
+
+        # Clear input box and submit immediately
+        input_widget.value = ""
+
+        try:
+            self.query_one("#slash-suggestions", OptionList).remove_class("visible")
+        except Exception:
+            pass
+
+        if clean_text.startswith("/"):
+            self.run_worker(self.handle_slash(clean_text), exclusive=False)
+        else:
+            log.write(f"[bold #febc2e]YOU:[/bold #febc2e] {clean_text}")
+            log.write("[dim #7b8cde]⯿ M.E.E.R.A is thinking...[/dim #7b8cde]")
+            self.current_status = "▓ THINKING"
+            self.update_status()
+            save_message(self.session_id, "user", clean_text)
+            self.agent_busy = True
+            self.run_worker(self._run_agent(clean_text), exclusive=True)
 
     def _clear_activity(self):
         for item in list(self.activity_items):
