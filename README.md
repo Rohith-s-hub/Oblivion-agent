@@ -22,7 +22,8 @@
 
 **Oblivion** was created by **Rohith R.** (a.k.a. `Rohith-s-hub`), a BSc Computer Science student from **Sivakasi, Tamil Nadu, India**.
 
-- **GitHub:** [@Rohith-s-hub](https://github.com/Rohith-s-hub)
+- **LinkedIn: https://www.linkedin.com/in/rohith-rajkumar-040676315/
+GitHub:** [@Rohith-s-hub](https://github.com/Rohith-s-hub)
 - **Project Homepage:** [github.com/Rohith-s-hub/Oblivion-agent](https://github.com/Rohith-s-hub/Oblivion-agent)
 - **PyPI Package:** [oblivion-agent](https://pypi.org/project/oblivion-agent/)
 - **Built with:** Python 3.11+, Textual, ChromaDB, litellm, Whisper, MCP
