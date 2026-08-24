@@ -176,6 +176,17 @@ def create_dir(path: str) -> str:
 def new_workspace(name: str, location: str = "") -> str:
     """Create a new workspace folder and switch into it.
 
+    SAFETY: If we are ALREADY in a workspace with this name, skip creation
+    and just confirm. Prevents duplicate creation during multi-file tasks.
+    """
+    import os as _os_nw
+    from pathlib import Path as _Path_nw
+    current_ws = _os_nw.environ.get("WORKSPACE_DIR", "")
+    if current_ws and _Path_nw(current_ws).name == name.strip():
+        return f"[SKIP] Already in workspace '{name}' at {current_ws}. Continue with your task."
+    # Original docstring continuation:
+    """
+
     Args:
       name: folder name (e.g. "myapp")
       location: optional parent directory. Special keywords:

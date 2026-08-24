@@ -2268,6 +2268,41 @@ class OblivionApp(App):
                 pass
 
         async def on_tool_start(tool_name: str, args: dict):
+            # CLAUDE-CODE-STYLE PROGRESS: narrate meaningful actions in chat
+            try:
+                if tool_name == "write_file":
+                    _p = args.get("path", "?")
+                    _sz = len(args.get("content", ""))
+                    log.write(f"[dim #a78bfa]✎[/dim #a78bfa] [#e0e7ff]Writing [bold]{_p}[/bold] [dim]({_sz} chars)[/dim]...[/#e0e7ff]")
+                elif tool_name == "batch_edit":
+                    _edits = args.get("edits", [])
+                    log.write(f"[dim #a78bfa]✎[/dim #a78bfa] [#e0e7ff]Writing [bold]{len(_edits)} files[/bold] in batch...[/#e0e7ff]")
+                    for _e in _edits[:12]:
+                        if isinstance(_e, dict):
+                            _pp = _e.get("path", "?")
+                            _cc = _e.get("content") or _e.get("new_text") or ""
+                            _sz2 = len(_cc) if isinstance(_cc, str) else 0
+                            log.write(f"[dim #7c8399]   → {_pp}[/dim #7c8399] [dim]({_sz2} chars)[/dim]")
+                elif tool_name == "edit_file":
+                    _p = args.get("path", "?")
+                    log.write(f"[dim #a78bfa]✎[/dim #a78bfa] [#e0e7ff]Editing [bold]{_p}[/bold]...[/#e0e7ff]")
+                elif tool_name == "run_bash":
+                    _cmd = args.get("command", "?")[:60]
+                    log.write(f"[dim #67e8f9]▸[/dim #67e8f9] [#e0e7ff]Running:[/#e0e7ff] [dim]{_cmd}[/dim]")
+                elif tool_name in ("switch_workspace", "new_workspace"):
+                    _pp = args.get("path") or args.get("name", "?")
+                    log.write(f"[dim #22d3ee]⇄[/dim #22d3ee] [#e0e7ff]Workspace →[/#e0e7ff] [bold]{_pp}[/bold]")
+                elif tool_name == "git_commit":
+                    _msg = args.get("message", "?")[:60]
+                    log.write(f"[dim #67e8f9]✓[/dim #67e8f9] [#e0e7ff]Committing:[/#e0e7ff] [dim]{_msg}[/dim]")
+                elif tool_name == "create_dir":
+                    _pp = args.get("path", "?")
+                    log.write(f"[dim #a78bfa]+[/dim #a78bfa] [#e0e7ff]Creating dir [bold]{_pp}[/bold][/#e0e7ff]")
+                elif tool_name == "run_tests":
+                    log.write(f"[dim #67e8f9]▸[/dim #67e8f9] [#e0e7ff]Running tests...[/#e0e7ff]")
+            except Exception:
+                pass  # never let narration break the agent
+
             item = ActivityItem(tool_name, args, "running")
             item.tool_name = tool_name  # remember for post-execution hooks
             await activity_scroll.mount(item)
@@ -2385,7 +2420,14 @@ class OblivionApp(App):
             log.write(f"[#febc2e]✗ LLM error: {msg}[/#febc2e]")
 
         async def on_parse_failure(raw: str):
-            log.write("[#febc2e]✗ Could not parse output, retrying…[/#febc2e]")
+            # Route to Agent Log (dim, subtle) instead of Chat (bold, alarming)
+            # Users don't need to see every parse retry - it's noise
+            try:
+                scroll = self.query_one("#activity-scroll", VerticalScroll)
+                dim_msg = Static("[dim #febc2e]⟳ parser retry (model output malformed)[/dim #febc2e]")
+                self._mount_watcher_item_sync(scroll, dim_msg)
+            except Exception:
+                pass
 
         # ── Run the unified runtime ──────────────────────────────────────────
         cbs = RuntimeCallbacks(

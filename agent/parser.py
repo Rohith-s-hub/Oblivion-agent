@@ -99,6 +99,16 @@ def parse_llm_output(text: str):
     # Strip <think>...</think> blocks (Qwen/DeepSeek thinking tokens)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
+    # STRIP RICH MARKUP that models sometimes hallucinate in tool JSON
+    # e.g. {"path": "contact.html", "con[/dim cyan]"}  ← breaks JSON parsing
+    _rich_patterns = [
+        r"\[/[^\]]*\]",
+        r"\[(?:dim|bold|italic|underline)(?:\s+[^\]]*)?\]",
+        r"\[#[0-9a-fA-F]{3,8}(?:\s+[^\]]*)?\]",
+    ]
+    for pat in _rich_patterns:
+        text = re.sub(pat, "", text)
+
     # CRITICAL: strip fake injected observations BEFORE looking for actions/answers
     text = _strip_fake_observations(text)
 

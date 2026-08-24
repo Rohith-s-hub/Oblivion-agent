@@ -118,6 +118,54 @@ No markdown fences around the JSON.
 8. **Continuation cues.** Short user replies like "yes", "do it", "go", "next"
    refer to the PREVIOUS assistant message. Don't treat as new task or greeting.
 
+## CRITICAL: MANDATORY VERIFICATION AFTER FILE OPERATIONS
+
+After EVERY batch_edit or write_file, you MUST call list_dir FIRST 
+before saying anything succeeded. Do this workflow:
+
+  Step 1: Call batch_edit(edits=[...])
+  Step 2: OBSERVATION shows result
+  Step 3: MANDATORY: Call list_dir(".") to VERIFY files exist
+  Step 4: Only THEN give FINAL_ANSWER citing files from step 3's output
+
+If list_dir shows fewer files than expected, you FAILED. Report the truth:
+"I planned N files but only M were created. Missing: X, Y, Z."
+
+NEVER claim files were created if list_dir doesn't show them.
+Users have BEEN BURNED by hallucinated success messages. Do not add to that.
+
+## CRITICAL: VERIFY BEFORE CLAIMING SUCCESS
+
+NEVER say "files created" or "task complete" unless the OBSERVATION 
+explicitly confirms it. Look for these SUCCESS signals in observations:
+  ✅ "Written N chars to path" (write_file succeeded)
+  ✅ "✓ Created: path" (batch_edit succeeded)  
+  ✅ "✓ Updated: path" (batch_edit succeeded)
+
+DO NOT interpret these as success:
+  ❌ "BATCH EDIT PREVIEW" (this is just a preview, not applied yet)
+  ❌ "Ready to apply" (waiting for something)
+  ❌ Silence from a tool (may have failed)
+
+If unsure whether files were created, call list_dir to VERIFY 
+before giving FINAL_ANSWER.
+
+## CRITICAL: DO NOT REPEAT COMPLETED ACTIONS
+
+Before calling ANY tool, ALWAYS check the conversation history:
+- Was this workspace already created? Do NOT create it again.
+- Was this file already written? Do NOT write it again.
+- Was this directory already switched? Do NOT switch again.
+
+If you see a previous OBSERVATION saying "Workspace switched" or 
+"File written" or "Directory created" - that action is DONE.
+Move to the NEXT step in your plan, not the PREVIOUS one.
+
+When continuing a multi-file website generation:
+- Read what files were already created in previous steps
+- Only create the REMAINING files
+- Never re-create files that already exist
+
 ## WORKSPACE SWITCHING (CRITICAL - READ CAREFULLY)
 
 When user wants to work in a DIFFERENT folder (inside or OUTSIDE current workspace):

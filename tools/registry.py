@@ -511,9 +511,48 @@ def get_tool_descriptions() -> str:
     return "\n".join(lines)
 
 
+def _strip_rich_markup(text: str) -> str:
+    """
+    Remove ANY Rich/Textual markup that leaked into a string.
+    Patterns handled:
+      [dim cyan]  [/dim cyan]  [/]  [#123abc]  [bold red]  [italic]
+      [/dim cyan])  ← even mid-string, mid-JSON
+    """
+    import re as _r
+    if not isinstance(text, str):
+        return text
+    # Nuclear option: strip anything that looks like [.*?] where .*? contains
+    # color words, hex codes, or common Rich tags. This is aggressive but SAFE
+    # because legit code rarely contains [word word] patterns.
+    patterns = [
+        r"\[/[^\]]*\]",           # any closing tag [/anything]
+        r"\[(?:dim|bold|italic|underline|reverse|strike|blink|red|green|blue|yellow|magenta|cyan|white|black)(?:\s+[^\]]*)?\]",
+        r"\[#[0-9a-fA-F]{3,8}(?:\s+[^\]]*)?\]",  # hex colors
+    ]
+    for pat in patterns:
+        text = _r.sub(pat, "", text)
+    return text
+
+
+def _sanitize_recursive(v):
+    """Recursively strip Rich markup from strings in any nested structure."""
+    if isinstance(v, str):
+        return _strip_rich_markup(v)
+    if isinstance(v, list):
+        return [_sanitize_recursive(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _sanitize_recursive(vv) for k, vv in v.items()}
+    return v
+
+
 def dispatch(tool_name: str, args: dict) -> str:
     if tool_name not in TOOL_FUNCTIONS:
         return f"Error: Unknown tool '{tool_name}'"
+
+    # SANITIZE: nuclear option - strip ALL Rich markup from ANY string in args
+    # Even deeply nested (batch_edit passes list of dicts with strings)
+    args = _sanitize_recursive(args)
+
     try:
         result = str(TOOL_FUNCTIONS[tool_name](**args))
         # After workspace switch - reset RAG collection so

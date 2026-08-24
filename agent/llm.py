@@ -297,24 +297,10 @@ class LLMClient:
                 err_brief = _short_error(e)
                 self._notify(short + " " + err_brief + " - trying next...")
 
-                # TASK RECAP: on first fallback, inject a system message
-                # so the new model doesn't confuse current task with earlier context
-                if failed_count == 1 and len(messages) > 4:
-                    last_user_msg = None
-                    for msg in reversed(messages):
-                        if msg.get("role") == "user":
-                            c = msg.get("content", "")
-                            if isinstance(c, str) and 10 < len(c) < 500:
-                                last_user_msg = c
-                                break
-                    if last_user_msg:
-                        messages = messages + [{
-                            "role": "system",
-                            "content": (
-                                f"[MODEL SWITCHED: Continue with the CURRENT task only: "
-                                f"{last_user_msg[:200]}. Do NOT restart from earlier context.]"
-                            )
-                        }]
+                # NOTE: Previously injected "task recap" here on fallback,
+                # but it caused the model to re-execute old user messages
+                # (e.g. re-running switch_workspace mid-website-generation).
+                # Better to trust the model to read conversation history correctly.
                 continue
 
         # All models exhausted

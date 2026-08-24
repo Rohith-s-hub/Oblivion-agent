@@ -275,6 +275,40 @@ class AgentRuntime:
 
             # ─── Final answer
             if isinstance(parsed, FinalAnswer):
+                # ANTI-HALLUCINATION: check if answer claims file creation
+                # without any actual write_file / batch_edit in recent history
+                _answer_lower = parsed.content.lower()
+                _claims_creation = any(kw in _answer_lower for kw in [
+                    "created:", "written:", "generated:", "wrote:",
+                    "have created", "created the", "files created"
+                ])
+                if _claims_creation:
+                    # Look back at last 5 observations for actual file writes
+                    _real_writes = 0
+                    for msg in self.agent.conversation[-10:]:
+                        c = msg.get("content", "")
+                        if isinstance(c, str):
+                            if "Written" in c and "chars to" in c:
+                                _real_writes += 1
+                            if "✓ Created:" in c or "✓ Updated:" in c:
+                                _real_writes += 1
+                    if _real_writes == 0:
+                        # Model is hallucinating! Force verification
+                        _log_event(self.session_id, "hallucination_block", {
+                            "claim": parsed.content[:200],
+                        })
+                        self.agent.conversation.append({
+                            "role": "user",
+                            "content": (
+                                "STOP - your answer claims files were created but I see "
+                                "NO write_file or batch_edit success in recent observations. "
+                                "Call list_dir(\".\") NOW to prove which files actually exist. "
+                                "Then report the TRUTH - do not claim success for files "
+                                "that were not written."
+                            )
+                        })
+                        continue  # force another iteration
+
                 _log_event(self.session_id, "final_answer", {"content": parsed.content})
                 if cb.on_final:
                     try:
