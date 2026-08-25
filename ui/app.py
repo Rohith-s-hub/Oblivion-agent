@@ -156,6 +156,7 @@ SLASH_COMMANDS = SLASH_COMMANDS[:0] + [
     ("/trust reset",  "Clear trust list (all mutations prompt again)"),
     ("/auto",         "Toggle AUTO mode (mutations auto-approve, destructive still prompt)"),
     ("/auto --persist", "AUTO mode saved to config.env across restarts"),
+    ("/vision <path> [prompt]", "Analyze image/screenshot mockup & generate code"),
     ("/wake",              "Wake word status (hey Jarvis detection)"),
     ("/wake on",           "Enable wake word listener"),
     ("/wake off",          "Disable wake word listener"),
@@ -1151,6 +1152,60 @@ class OblivionApp(App):
                 log.write(f"Error: {e}")
             return True
 
+        if command == "/vision":
+            # Multimodal Vision Command: /vision <image_path> [optional prompt]
+            parts = arg.strip().split(maxsplit=1)
+            if not parts or not parts[0]:
+                log.write("[#febc2e]Usage: /vision <image_path> [prompt][/#febc2e]")
+                log.write("[dim]Example: /vision ~/mockup.png Recreate this UI in HTML/CSS[/dim]")
+                return True
+
+            img_path = parts[0].strip()
+            user_prompt = parts[1].strip() if len(parts) > 1 else "Analyze this image in detail and recreate the UI/code structure shown."
+
+            try:
+                from agent.vision import encode_image_to_data_url, format_multimodal_message, is_vision_supported
+            except ImportError as e:
+                log.write(f"[#febc2e]⚠ Vision module error: {e}[/#febc2e]")
+                return True
+
+            current_model = os.getenv("DEFAULT_MODEL", "")
+            if not is_vision_supported(current_model):
+                log.write(f"[#febc2e]ℹ Model '{current_model}' may not support vision. Switching to gemma4:31b-cloud...[/#febc2e]")
+                os.environ["DEFAULT_MODEL"] = "ollama/gemma4:31b-cloud"
+                self.update_status()
+
+            success, data_url_or_err, mime_type = encode_image_to_data_url(img_path)
+            if not success:
+                log.write(f"[#febc2e]✗ {data_url_or_err}[/#febc2e]")
+                return True
+
+            log.write(Panel(
+                f"[bold #67e8f9]📷 VISION INPUT ATTACHED[/bold #67e8f9]\n"
+                f"[dim]Image:[/#7c8399] {img_path} ({mime_type})\n"
+                f"[dim]Prompt:[/#7c8399] {user_prompt}",
+                title="[#8b5cf6]◢ MULTIMODAL ANALYSIS ◣[/#8b5cf6]",
+                border_style="#8b5cf6",
+            ))
+
+            # Format multimodal message and append to conversation
+            multi_msg = format_multimodal_message(user_prompt, data_url_or_err)
+            self.agent.conversation.append(multi_msg)
+
+            log.write("[dim #7b8cde]⯿ M.E.E.R.A is analyzing image...[/dim #7b8cde]")
+            self.current_status = "▓ ANALYZING IMAGE"
+            self.update_status()
+
+            try:
+                from db.store import save_message
+                save_message(self.session_id, "user", f"[Vision: {img_path}] {user_prompt}")
+            except Exception:
+                pass
+
+            self.agent_busy = True
+            self.run_worker(self._run_agent(user_prompt), exclusive=True)
+            return True
+
         if command == "/wake":
             # Manage wake word detection
             arg_lower = arg.lower().strip()
@@ -1171,6 +1226,20 @@ class OblivionApp(App):
                     "[#febc2e]⚠ openwakeword not installed.[/#febc2e]\n"
                     "Install: [bold]uv pip install openwakeword[/bold]"
                 )
+                return True
+
+            if arg_lower.startswith("model "):
+                model_name = arg_lower.split(" ", 1)[1].strip()
+                if model_name:
+                    os.environ["WAKE_WORD_MODEL"] = model_name
+                    try:
+                        self._update_env("WAKE_WORD_MODEL", model_name)
+                    except Exception:
+                        pass
+                    if is_wake_word_enabled():
+                        disable_wake_word()
+                        self._start_wake_word()
+                    log.write(f"[#67e8f9]✓ Wake word model set to '{model_name}'[/#67e8f9]")
                 return True
 
             if not arg_lower or arg_lower == "status":

@@ -7,9 +7,11 @@ from tools.symbol_tools import find_symbol, list_symbols, find_callers, project_
 from tools.batch_edit import batch_edit, batch_apply
 from tools.test_runner import run_tests, test_file, detect_test_framework
 from tools.web_search import web_search, fetch_page, search_stackoverflow, lookup_package
+from tools.preview import open_preview
 from tools.batch_edit import batch_edit, batch_apply
 from tools.test_runner import run_tests, test_file, detect_test_framework
 from tools.web_search import web_search, fetch_page, search_stackoverflow, lookup_package
+from tools.preview import open_preview
 from tools.git_tools import (
     git_status, git_diff, git_log,
     git_commit, git_branch, git_undo,
@@ -354,6 +356,19 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "open_preview",
+        "description": (
+            "Open a generated HTML web page in the user's default browser. "
+            "Automatically serves the workspace over a local HTTP server. "
+            "Use this AFTER creating or updating web pages (e.g. index.html) "
+            "so the user can see the live result immediately."
+        ),
+        "parameters": {
+            "path": {"type": "string", "description": "Relative path to HTML file (default 'index.html')", "required": False},
+            "port": {"type": "integer", "description": "Preferred port (default 8000)", "required": False},
+        },
+    },
+    {
         "name": "run_tests",
         "description": (
             "Run the project test suite and get structured results. "
@@ -479,6 +494,7 @@ TOOL_FUNCTIONS = {
     "batch_edit":    batch_edit,
     "batch_apply":   batch_apply,
     # Web search
+    "open_preview":         open_preview,
     "web_search":          web_search,
     "fetch_page":          fetch_page,
     "search_stackoverflow": search_stackoverflow,
