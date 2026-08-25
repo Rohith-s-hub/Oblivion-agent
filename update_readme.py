@@ -1,4 +1,9 @@
-# OBLIVION AI 🔮
+import os
+from pathlib import Path
+
+readme_path = Path("README.md")
+
+content = """# OBLIVION AI 🔮
 ### Open-Source Terminal AI Coding Agent with Voice, 3-Layer RAG, and MCP Server
 
 [![PyPI version](https://img.shields.io/pypi/v/oblivion-agent.svg?color=8b5cf6)](https://pypi.org/project/oblivion-agent/)
@@ -11,13 +16,6 @@
 Oblivion AI is a terminal-native, open-source AI coding agent built as a privacy-respecting, zero-cost alternative to proprietary tools like **Cursor, Copilot, and Claude Code**. It lives inside your terminal, understands your local codebase semantically, executes multi-file edits atomically, and responds via text or natural voice.
 
 ---
-
-
-
-## 🔮 Oblivion AI Agent — The Best Open Source Terminal AI Agent
-
-Oblivion AI is a terminal-native, open-source AI agent designed for developers who want a fast, privacy-first, and zero-cost alternative to proprietary coding tools. Functioning as a full **Oblivion Terminal Agent**, it lives inside your CLI, understands local codebases via 3-layer hybrid RAG, and executes multi-file code changes autonomously.
-
 
 ## 🌟 Key Highlights
 
@@ -115,3 +113,7 @@ Oblivion AI was designed and built by Rohith R. (@Rohith-s-hub), a BSc Computer 
 📦 PyPI: oblivion-agent
 📄 License
 Distributed under the MIT License. Free for personal, academic, and commercial use.
+"""
+
+readme_path.write_text(content, encoding="utf-8")
+print("✅ README.md successfully updated!")
