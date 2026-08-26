@@ -31,7 +31,7 @@ DTYPE = "int16"
 # All voice params are env-configurable via ~/.oblivion/config.env
 MAX_RECORD_SECONDS = int(os.getenv("VOICE_MAX_RECORD", "60"))
 SILENCE_THRESHOLD = int(os.getenv("VOICE_SILENCE_THRESHOLD", "1200"))  # higher = tolerates more noise
-SILENCE_DURATION = float(os.getenv("VOICE_SILENCE_DURATION", "3.0"))  # 3s pause = auto-stop
+SILENCE_DURATION = float(os.getenv("VOICE_SILENCE_DURATION", "1.5"))  # 3s pause = auto-stop
 MIN_RECORD_SECONDS = float(os.getenv("VOICE_MIN_RECORD", "0.8"))  # min duration before silence check
 
 from agent.paths import whisper_dir
@@ -52,7 +52,7 @@ def get_whisper_model(model_size: str = None):
     if _whisper_model is not None:
         return _whisper_model
 
-    size = model_size or os.getenv("VOICE_MODEL", "medium")
+    size = model_size or os.getenv("VOICE_MODEL", "base.en")
 
     try:
         import torch
@@ -131,6 +131,10 @@ class VoiceRecorder:
         self._record_start = time.time()
         self.on_status("recording")
 
+        # Dynamic noise floor estimation
+        self._noise_floor = 400.0
+        self._has_spoken = False
+
         def callback(indata, frames, time_info, status):
             chunk = indata.copy().flatten()
             self._audio_buffer.append(chunk)
@@ -149,6 +153,10 @@ class VoiceRecorder:
                         raise sd.CallbackStop()
                 else:
                     self._silence_start = None
+
+            if elapsed >= MAX_RECORD_SECONDS:
+                self._stop_flag.set()
+                raise sd.CallbackStop()
 
             if elapsed >= MAX_RECORD_SECONDS:
                 self._stop_flag.set()
@@ -193,10 +201,23 @@ class VoiceRecorder:
         def callback(indata, frames, time_info, status):
             chunk = indata.copy().flatten()
             self._audio_buffer.append(chunk)
+
             rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
             self.on_level(rms)
-            # Hard cap at MAX_RECORD_SECONDS
-            if time.time() - self._record_start >= MAX_RECORD_SECONDS:
+
+            elapsed = time.time() - self._record_start
+
+            if elapsed >= MIN_RECORD_SECONDS:
+                if rms < SILENCE_THRESHOLD:
+                    if self._silence_start is None:
+                        self._silence_start = time.time()
+                    elif time.time() - self._silence_start >= SILENCE_DURATION:
+                        self._stop_flag.set()
+                        raise sd.CallbackStop()
+                else:
+                    self._silence_start = None
+
+            if elapsed >= MAX_RECORD_SECONDS:
                 self._stop_flag.set()
                 raise sd.CallbackStop()
 
@@ -248,18 +269,13 @@ def transcribe(audio, language: str = "en") -> str:
 
     segments, info = model.transcribe(
         audio_float,
-        language=language,
         beam_size=5,
-        best_of=5,
-        temperature=0.0,                  # deterministic
-        condition_on_previous_text=False, # don't hallucinate continuations
+        language="en",
         initial_prompt=initial_prompt,
         vad_filter=True,
         vad_parameters=dict(
-            min_silence_duration_ms=400,
-            speech_pad_ms=200,
+            min_silence_duration_ms=500,
         ),
-        no_speech_threshold=0.6,          # higher = stricter (less hallucination)
     )
 
     text = " ".join(seg.text.strip() for seg in segments).strip()

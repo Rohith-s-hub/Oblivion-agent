@@ -1,3 +1,4 @@
+import re
 import subprocess
 import os
 from dotenv import load_dotenv
@@ -34,6 +35,20 @@ BLOCKED = {"rm -rf /", "rm -rf ~", ":(){ :|:& };:", "mkfs", "dd if=/dev/zero", "
 
 
 def run_bash(command: str, timeout: int = 30) -> str:
+    # ── SELF-DESTRUCTION GUARD ──
+    # Prevent the agent from running 'rm' on files created/modified in the current task
+    cmd_lower = command.lower().strip()
+    if any(k in cmd_lower for k in ["rm ", "rm -", "unlink ", "remove-item"]):
+        # Check if command targets common web/source files right after writing
+        if any(ext in cmd_lower for ext in [".html", ".css", ".js", ".json", ".py", ".ts", ".jsx", ".tsx"]):
+            # Check if this is a bulk deletion of workspace files
+            if re.search(r"rm\s+(-[rf]+\s+)?[\w\s\.-]+\.(html|css|js|json|py)", command):
+                return (
+                    "CRITICAL SAFETY BLOCK: Refusing to execute 'rm' on files in the workspace! "
+                    "You recently generated these files. Do NOT delete files created in the current task. "
+                    "If the user wants to clean the directory, they must explicitly ask in the VERY LAST turn."
+                )
+
     if any(b in command.lower() for b in BLOCKED):
         return f"Blocked command: {command}"
     try:

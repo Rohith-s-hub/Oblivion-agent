@@ -3,6 +3,8 @@ import json
 import time
 from typing import Callable, Optional
 from dotenv import load_dotenv
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+os.environ["DISABLE_LITELLM_TELEMETRY"] = "TRUE"
 import litellm
 from rich.console import Console
 

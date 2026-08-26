@@ -183,7 +183,7 @@ def new_workspace(name: str, location: str = "") -> str:
     from pathlib import Path as _Path_nw
     current_ws = _os_nw.environ.get("WORKSPACE_DIR", "")
     if current_ws and _Path_nw(current_ws).name == name.strip():
-        return f"[SKIP] Already in workspace '{name}' at {current_ws}. Continue with your task."
+        return f"ERROR: You called new_workspace but you are ALREADY in workspace '{name}' ({current_ws}). DO NOT call new_workspace or switch_workspace again! Execute your plan NOW using batch_edit to generate the files!"
     # Original docstring continuation:
     """
 

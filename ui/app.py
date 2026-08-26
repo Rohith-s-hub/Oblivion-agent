@@ -157,7 +157,7 @@ SLASH_COMMANDS = SLASH_COMMANDS[:0] + [
     ("/auto",         "Toggle AUTO mode (mutations auto-approve, destructive still prompt)"),
     ("/auto --persist", "AUTO mode saved to config.env across restarts"),
     ("/vision <path> [prompt]", "Analyze image/screenshot mockup & generate code"),
-    ("/wake",              "Wake word status (hey Jarvis detection)"),
+    ("/wake",              "Wake word status (Hey Meera detection)"),
     ("/wake on",           "Enable wake word listener"),
     ("/wake off",          "Disable wake word listener"),
     ("/wake status",       "Show wake word status"),
@@ -787,6 +787,16 @@ class OblivionApp(App):
         except Exception:
             pass
 
+    def _speak_async(self, text: str):
+        """Play TTS in a background thread so it doesn't block the UI or Agent."""
+        try:
+            from agent import friday
+            if friday.is_enabled():
+                import threading
+                threading.Thread(target=friday.speak, args=(text,), daemon=True).start()
+        except Exception:
+            pass
+
     async def on_mount(self) -> None:
         # NUCLEAR FIX: restore workspace HERE - after all imports/init done
         try:
@@ -830,9 +840,34 @@ class OblivionApp(App):
         self._last_known_workspace = os.environ.get("WORKSPACE_DIR", "")
         self.set_interval(2.0, self._check_workspace_change)
 
+        # Wire TTS completion callback for hands-free auto-listening on questions
+        try:
+            from agent import friday
+            def _handle_speech_done(spoken_text: str):
+                # If Meera asked a question and voice/wake is active, auto-trigger recording!
+                if spoken_text and "?" in spoken_text:
+                    def _auto_record():
+                        if not self.voice_recording and not self.agent_busy:
+                            self.run_worker(self._start_voice_recording(), exclusive=False)
+                    self.call_from_thread(_auto_record)
+
+            friday.set_on_speech_done_callback(_handle_speech_done)
+        except Exception:
+            pass
+
         # Start file watcher
         if self.auto_watch_enabled:
             self._start_watcher()
+
+        # Background Whisper warm-up (non-blocking)
+        def _bg_warmup_whisper():
+            try:
+                from agent.voice import get_whisper_model
+                get_whisper_model()
+            except Exception:
+                pass
+        import threading
+        threading.Thread(target=_bg_warmup_whisper, daemon=True).start()
 
         # Start wake word detector if enabled in config
         try:
@@ -913,17 +948,20 @@ class OblivionApp(App):
         except Exception:
             recent_sessions_text = "[dim #7c8399]Session history unavailable[/dim #7c8399]"
 
-        # Welcome panel content
+        # Welcome panel with M.E.E.R.A. Assistant Identity
+        wake_status = "Active ('Hey Meera')" if os.getenv("WAKE_WORD_ENABLED", "false").lower() == "true" else "Standby (press Ctrl+T or /wake on)"
+
         welcome_content = (
             f"[#e0e7ff]Welcome back, [bold #67e8f9]{_user_name}[/bold #67e8f9] 👋[/#e0e7ff]\n\n"
-            f"[#a78bfa]Model:[/#a78bfa]     [#e0e7ff]{_model_short}[/#e0e7ff]\n"
-            f"[#a78bfa]Workspace:[/#a78bfa] [#67e8f9]{_workspace_display}[/#67e8f9]\n"
-            f"[#a78bfa]Session:[/#a78bfa]   [#e0e7ff]#{self.session_id}[/#e0e7ff]"
+            f"[#a78bfa]AI Persona:[/#a78bfa]  [bold #67e8f9]M.E.E.R.A.[/bold #67e8f9] [dim](Engineering & Reasoning Assistant)[/dim]\n"
+            f"[#a78bfa]LLM Model:[/#a78bfa]   [#e0e7ff]{_model_short}[/#e0e7ff]\n"
+            f"[#a78bfa]Workspace:[/#a78bfa]   [#67e8f9]{_workspace_display}[/#67e8f9]\n"
+            f"[#a78bfa]Voice Mode:[/#a78bfa]  [#e0e7ff]{wake_status}[/#e0e7ff]"
         )
 
         log.write(Panel(
             welcome_content,
-            title="[bold #8b5cf6]◢ OBLIVION AI ◣[/bold #8b5cf6]",
+            title="[bold #8b5cf6]◢ M.E.E.R.A. ONLINE ◣[/bold #8b5cf6]",
             border_style="#8b5cf6",
             padding=(1, 2),
         ))
@@ -2337,6 +2375,19 @@ class OblivionApp(App):
                 pass
 
         async def on_tool_start(tool_name: str, args: dict):
+            # JARVIS-STYLE VOICE FEEDBACK: Speak asynchronously while working
+            import random
+            if tool_name == "batch_edit":
+                self._speak_async(random.choice(["Building the files now, boss.", "Drafting the code.", "Right away, boss."]))
+            elif tool_name in ["search_code", "grep_files"]:
+                self._speak_async(random.choice(["Scanning the codebase.", "Looking that up now.", "Searching."]))
+            elif tool_name == "plan_task":
+                self._speak_async("Formulating a plan.")
+            elif tool_name == "open_preview":
+                self._speak_async("Opening the live preview in your browser.")
+            elif tool_name == "run_bash":
+                self._speak_async("Executing terminal command.")
+
             # CLAUDE-CODE-STYLE PROGRESS: narrate meaningful actions in chat
             try:
                 if tool_name == "write_file":
@@ -2687,13 +2738,25 @@ class OblivionApp(App):
         def _on_wake_from_thread():
             """Called from wake word thread when "hey Jarvis" detected."""
             def _trigger():
-                # Meera says "Yes?"
-                try:
-                    from agent import friday
-                    if friday.is_enabled():
-                        friday.speak("Yes?")
-                except Exception:
-                    pass
+                # Natural, conversational wake-word response
+                import random, time
+                now = time.time()
+                last_wake = getattr(self, "_last_wake_time", 0)
+                self._last_wake_time = now
+
+                # If woken up again within 30s, use short subtle follow-up
+                if now - last_wake < 30.0:
+                    short_greetings = ["Yes, boss?", "Listening.", "mm-hmm?", "Go ahead."]
+                    self._speak_async(random.choice(short_greetings))
+                else:
+                    natural_greetings = [
+                        "Yes, boss?",
+                        "I'm listening, boss.",
+                        "Go ahead, boss.",
+                        "What can I do for you, boss?",
+                        "Listening, boss."
+                    ]
+                    self._speak_async(random.choice(natural_greetings))
                 # Then trigger voice recording (same as Ctrl+T)
                 if not self.voice_recording:
                     self.run_worker(self._start_voice_recording(), exclusive=False)

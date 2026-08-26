@@ -241,11 +241,20 @@ def last_workspace_file():
 
 
 def save_last_workspace(workspace_path: str) -> None:
-    """Persist the last active workspace so it can be restored on next launch."""
+    """Persist the last active workspace across sessions in both last_workspace.txt and config.env."""
     try:
+        ws = str(Path(workspace_path).expanduser().resolve())
         f = last_workspace_file()
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(str(workspace_path))
+        f.write_text(ws, encoding="utf-8")
+        
+        cfg = config_env()
+        if cfg.exists():
+            lines = cfg.read_text(encoding="utf-8").splitlines()
+            new_lines = [l for l in lines if not l.startswith("WORKSPACE_DIR=")]
+            new_lines.append(f"WORKSPACE_DIR={ws}")
+            nl = chr(10)
+            cfg.write_text(nl.join(new_lines) + nl, encoding="utf-8")
     except Exception:
         pass
 

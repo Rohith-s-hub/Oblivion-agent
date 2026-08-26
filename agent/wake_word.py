@@ -82,7 +82,7 @@ def list_available_wake_words() -> list[str]:
 
 
 class WakeWordDetector:
-    DEFAULT_WAKE_WORDS = ["hey_jarvis"]
+    DEFAULT_WAKE_WORDS = ["hey_jarvis", "alexa", "hey_mycroft"]
 
     def __init__(
         self,
@@ -127,8 +127,11 @@ class WakeWordDetector:
                 if word_clean in custom_models:
                     selected_paths.append(str(custom_models[word_clean]))
                 else:
+                    # Smart Alias: If 'hey_meera' requested but no .onnx on disk,
+                    # map to 'hey_jarvis' model while keeping Meera identity active
+                    lookup_word = "hey_jarvis" if word_clean in ("hey_meera", "meera") else word_clean
                     match = next(
-                        (p for p in all_pretrained if word_clean in os.path.basename(p).lower()),
+                        (p for p in all_pretrained if lookup_word in os.path.basename(p).lower()),
                         None,
                     )
                     if match:

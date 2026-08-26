@@ -159,6 +159,17 @@ class AgentRuntime:
         """Run one full user-turn. Returns the final-answer text, or None on error."""
         cb = callbacks
 
+                # Clarify context when user approves a plan so LLM doesn't anchor to old messages
+        _clean_input = user_message.strip().lower()
+        if _clean_input in ("yes", "y", "go", "proceed", "do it", "approved", "sure", "ok"):
+            _last_asst = ""
+            for _m in reversed(self.agent.conversation):
+                if _m.get("role") == "assistant":
+                    _last_asst = _m.get("content", "")
+                    break
+            if "PLAN:" in _last_asst or "Approve this plan?" in _last_asst:
+                user_message = f"{user_message} (Plan approved. Proceed immediately to batch_edit to write all planned files. Do not switch workspaces.)"
+
         self.agent.conversation.append({"role": "user", "content": user_message})
         # Refresh system prompt with knowledge packs relevant to this user request
         try:
@@ -275,6 +286,29 @@ class AgentRuntime:
 
             # ─── Final answer
             if isinstance(parsed, FinalAnswer):
+                # ── PLAN RECONCILIATION CHECK ──
+                # If a plan was proposed with N files, check that all planned files exist on disk
+                try:
+                    import os as _os_rec
+                    from pathlib import Path as _Path_rec
+                    _ws_rec = _Path_rec(_os_rec.getenv("WORKSPACE_DIR", ".")).resolve()
+                    _planned_files = set()
+                    for _m in self.agent.conversation:
+                        _c = _m.get("content", "")
+                        if isinstance(_c, str) and ("PLAN:" in _c or "Approve this plan?" in _c):
+                            import re as _re_p
+                            for _match in _re_p.finditer(r"\d+\s+([\w./\-_]+\.(?:html|css|js|json|py|ts|jsx|tsx|svg))", _c):
+                                _planned_files.add(_match.group(1).strip())
+                    if _planned_files:
+                        _missing_files = [f for f in _planned_files if not (_ws_rec / f).exists()]
+                        if _missing_files:
+                            _log_event(self.session_id, "plan_reconciliation_missing", {"missing": _missing_files})
+                            _missing_str = ", ".join(_missing_files)
+                            self.agent.conversation.append({"role": "user", "content": _msg})
+                            continue
+                except Exception:
+                    pass
+
                 # ANTI-HALLUCINATION: check if answer claims file creation
                 # without any actual write_file / batch_edit in recent history
                 _answer_lower = parsed.content.lower()
