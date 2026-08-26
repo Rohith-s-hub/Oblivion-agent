@@ -38,6 +38,7 @@ TOOL_TIERS = {
     "git_branch": "read",
     # Web search - read tier (fetches public web content)
     "open_preview":         "read",
+    "search_stock_images":   "read",
     "web_search":           "read",
     "fetch_page":           "read",
     "search_stackoverflow": "read",

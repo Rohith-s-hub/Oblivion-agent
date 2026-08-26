@@ -1,96 +1,17 @@
-# Debugging Knowledge Pack - Common Failures and Fixes
+# ELITE DEBUGGING & ERROR RESOLUTION KNOWLEDGE
 
-## CRITICAL: "localhost refused to connect" / ERR_CONNECTION_REFUSED
+When presented with compiler, runtime, or import errors, you must act as a Senior Staff Engineer diagnosing a broken build.
 
-This is the #1 issue. Causes in order of likelihood:
+## React & Vite "Failed to resolve import" Errors
+**Root Cause:** The file `src/App.tsx` is trying to import a component (e.g., `./pages/About`), but the file `src/pages/About.tsx` or `src/pages/About.jsx` does not exist on disk.
 
-1. Server is bound to 127.0.0.1 only, not 0.0.0.0
-   - React/Vite: set server.host: true in vite.config.js
-   - Vue/Vite: same fix
-   - Next.js: use next dev -H 0.0.0.0
-   - Express: app.listen(3000, '0.0.0.0')
+**Resolution Steps:**
+1. Call `project_map` to verify the existence of the `src/pages/` or `src/components/` directories.
+2. If the directory is missing, call `create_dir`.
+3. If the file is missing, use `batch_edit` to create the missing file with boilerplate code (e.g. `export default function About() { return <div>About</div>; }`).
+4. Ensure the file extension matches the project type (use `.tsx` for TypeScript, `.jsx` for JavaScript).
 
-2. Wrong port - server is on different port
-   - Check what start_server actually reported
-   - Vite default: 5173 (NOT 3000)
-   - Next.js default: 3000
-   - Always pass explicit port= to start_server
-
-3. Server crashed silently
-   - Check the server log file path returned by start_server
-   - Use read_file on the log to see the error
-   - Common: missing dependency -> npm install
-
-4. Server not actually started
-   - start_server returned but process died
-   - Check with list_servers
-   - Look at log file for crash trace
-
-5. Firewall blocking
-   - Rare on dev machines, common on cloud VMs
-
-## DIAGNOSTIC RECIPE: When user says "localhost refused to connect"
-
-    Step 1: list_servers -> see what's running
-    Step 2: read_file(/tmp/oblivion-server-XXXXX.log) -> see actual error
-    Step 3: Diagnose based on log content
-    Step 4: stop_server old one, start_server with fix
-    Step 5: Wait 5-10 seconds before claiming success
-
-## Common Build Tool Errors
-
-| Error | Meaning | Fix |
-|---|---|---|
-| npm ERR! ENOENT package.json | Wrong directory | cd into project root first |
-| npm ERR! peer dep missing | Version conflict | npm install --legacy-peer-deps |
-| EADDRINUSE :::3000 | Port already taken | Kill old process or use different port |
-| Module not found | Missing install or typo | npm install pkg or check path |
-| Cannot find module 'X' (Node) | Not installed | npm install X |
-| ENOSPC: no space left | Disk full | Free up space |
-| Killed (no other message) | OOM (out of memory) | Increase swap, close other apps |
-
-## Python Server Errors
-
-| Error | Fix |
-|---|---|
-| ModuleNotFoundError | pip install module or check venv activated |
-| Port already in use | lsof -i :8000 then kill the process |
-| IndentationError | Mixed tabs/spaces - use 4 spaces |
-| ImportError: attempted relative import | Run as python -m package.module |
-
-## Database Errors
-
-| Error | Fix |
-|---|---|
-| OperationalError: no such table | Run migrations: python manage.py migrate or flask db upgrade |
-| connection refused (postgres) | Postgres not running: sudo service postgresql start |
-| SQLite database is locked | Another process has it open; close other connections |
-
-## Browser/Frontend Issues
-
-| Symptom | Likely Cause | Fix |
-|---|---|---|
-| Blank white page | JS error in console | Open DevTools (F12), check Console tab |
-| 404 on /static/X | Build not run / wrong path | npm run build, check public/ structure |
-| CORS error | Backend not allowing frontend origin | Add CORS headers/middleware on backend |
-| 401 Unauthorized | Auth token missing/expired | Check localStorage/cookies, login again |
-| Mixed content (https/http) | Loading http resources on https page | Use https everywhere |
-
-## Server Health Check Recipe
-
-When you start a server and need to verify it works:
-
-    1. start_server(command="npm run dev", port=3000, wait_seconds=8)
-    2. run_bash(command="curl -s -o /dev/null -w '%{http_code}' http://localhost:3000")
-       expect "200" or similar
-    3. If non-200: read_file on the log path that start_server returned
-    4. Diagnose, fix, retry
-
-## When Stuck - Escalation Order
-
-1. Read the actual error log (don't guess)
-2. Search the codebase for the error message
-3. Check if dependencies are installed
-4. Check if config files are correct
-5. Check if ports are conflicted
-6. Try with maximum verbosity: npm run dev -- --debug
+## General Bug Fixing Mindset
+- **Read the Code First:** Never attempt a fix without running `read_file` on the exact file mentioned in the stack trace.
+- **Check Surrounding Context:** Import errors are often caused by typos in folder names (e.g. `Component` vs `components`). Run `list_dir` on the parent folder to verify exact casing.
+- **Do Not Re-architect:** If a user pastes a single missing import error, just create the missing file or fix the import line. Do not rewrite their entire application or create new workspaces.

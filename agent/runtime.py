@@ -170,6 +170,21 @@ class AgentRuntime:
             if "PLAN:" in _last_asst or "Approve this plan?" in _last_asst:
                 user_message = f"{user_message} (Plan approved. Proceed immediately to batch_edit to write all planned files. Do not switch workspaces.)"
 
+        # AUTOMATIC CONTEXT PRUNING FOR NEW MAJOR TASKS
+        # If user starts a major build task and history is > 10 msgs, prune old context
+        _msg_low = user_message.lower()
+        _is_major_build = any(kw in _msg_low for kw in ["create", "build", "scaffold", "make a website", "make an app", "new project"])
+        if _is_major_build and len(self.agent.conversation) > 8:
+            # Keep original task + last 2 turns, prune old debugging/error turns
+            first_user = self.agent.conversation[0]
+            recent_turns = self.agent.conversation[-4:]
+            pruned_summary = {
+                "role": "user",
+                "content": "[SYSTEM CONTEXT RESET: User started a new major project request. Past debugging context cleared. Focus exclusively on the new user request.]"
+            }
+            self.agent.conversation = [first_user, pruned_summary] + recent_turns
+            _log_event(self.session_id, "context_pruned_for_new_task", {})
+
         self.agent.conversation.append({"role": "user", "content": user_message})
         # Refresh system prompt with knowledge packs relevant to this user request
         try:

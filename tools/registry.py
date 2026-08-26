@@ -6,11 +6,11 @@ from tools.search_code import search_code
 from tools.symbol_tools import find_symbol, list_symbols, find_callers, project_map
 from tools.batch_edit import batch_edit, batch_apply
 from tools.test_runner import run_tests, test_file, detect_test_framework
-from tools.web_search import web_search, fetch_page, search_stackoverflow, lookup_package
+from tools.web_search import web_search, fetch_page, search_stackoverflow, lookup_package, search_stock_images
 from tools.preview import open_preview
 from tools.batch_edit import batch_edit, batch_apply
 from tools.test_runner import run_tests, test_file, detect_test_framework
-from tools.web_search import web_search, fetch_page, search_stackoverflow, lookup_package
+from tools.web_search import web_search, fetch_page, search_stackoverflow, lookup_package, search_stock_images
 from tools.preview import open_preview
 from tools.git_tools import (
     git_status, git_diff, git_log,
@@ -307,6 +307,19 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "search_stock_images",
+        "description": (
+            "Search for high-resolution, royalty-free stock image URLs (Unsplash). "
+            "Use this BEFORE writing web pages to fetch REAL image URLs for product cards, "
+            "hero backgrounds, team avatars, and blog thumbnails. "
+            "NEVER use placeholder boxes or blank images when you can fetch real stock images!"
+        ),
+        "parameters": {
+            "query": {"type": "string", "description": "Search query e.g. 'luxury watch', 'headphones'", "required": True},
+            "count": {"type": "integer", "description": "Number of images to fetch (default 5)", "required": False},
+        },
+    },
+    {
         "name": "web_search",
         "description": (
             "Search the web using DuckDuckGo. Free, no API key needed. "
@@ -495,6 +508,7 @@ TOOL_FUNCTIONS = {
     "batch_apply":   batch_apply,
     # Web search
     "open_preview":         open_preview,
+    "search_stock_images":   search_stock_images,
     "web_search":          web_search,
     "fetch_page":          fetch_page,
     "search_stackoverflow": search_stackoverflow,

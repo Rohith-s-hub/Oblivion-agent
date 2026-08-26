@@ -368,3 +368,68 @@ def _lookup_npm(package: str) -> str:
     lines.append(f"   Install:        npm install {name}@{version}")
 
     return "\n".join(lines)
+
+
+# ── Stock Image Search (Unsplash) ─────────────────────────────────────────────
+
+
+# ── Stock Image Search (Unsplash) ─────────────────────────────────────────────
+
+
+# ── Stock Image Search (Unsplash) ─────────────────────────────────────────────
+def search_stock_images(query: str, count: int = 5) -> str:
+    """
+    Search for high-quality, royalty-free stock images (Unsplash).
+    Returns real, working image URLs to use in <img> src attributes for websites.
+
+    query: Search term e.g. 'luxury watch', 'modern headphones', 'minimalist office'
+    count: Number of image URLs to return (default 5, max 10)
+    """
+    if not query or not query.strip():
+        return "Error: image search query cannot be empty."
+
+    query_clean = query.strip()
+    count = min(max(1, count), 10)
+
+    encoded_query = urllib.parse.quote_plus(query_clean)
+    url = f"https://unsplash.com/napi/search/photos?query={encoded_query}&per_page={count}"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    ok, raw = _fetch(url, timeout=10, headers=headers)
+    if not ok:
+        fallback_urls = []
+        for i in range(1, count + 1):
+            fallback_urls.append(f"https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=800&q=80&sig={i}")
+        
+        lines = [f"📸 Stock images for '{query_clean}' (Fallback mode):"]
+        for u in fallback_urls:
+            lines.append(f"  • {u}")
+        return "\n".join(lines)
+
+    try:
+        data = json.loads(raw)
+        results = data.get("results", [])
+        if not results:
+            return f"No stock images found for '{query_clean}'. Try broader terms like 'product' or 'technology'."
+
+        lines = [f"📸 Stock images found for '{query_clean}':", ""]
+        for i, item in enumerate(results[:count], 1):
+            urls = item.get("urls", {})
+            img_url = urls.get("regular") or urls.get("small") or urls.get("raw")
+            alt_desc = item.get("alt_description") or item.get("description") or query_clean
+            
+            if img_url:
+                if "?" not in img_url:
+                    img_url += "?auto=format&fit=crop&w=800&q=80"
+                lines.append(f"  {i}. {img_url}")
+                lines.append(f"     Alt: \"{alt_desc[:80]}\"")
+                lines.append("")
+
+        lines.append("Copy these exact URLs into your <img> src attributes!")
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Failed to parse stock images for '{query_clean}': {e}"

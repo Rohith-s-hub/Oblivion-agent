@@ -148,3 +148,8 @@ All sub-pages (checkout, payment, cart, contact, login) MUST maintain the exact 
   box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);
 }
 ```
+
+
+## 🖼️ REAL IMAGE & DESIGN RESEARCH PROTOCOL (MANDATORY)
+1. **REAL IMAGES:** NEVER use generic gray placeholder boxes. Call `search_stock_images(query="...", count=6)` to fetch real Unsplash URLs before writing HTML.
+2. **DESIGN RESEARCH:** Call `web_search` for design inspiration when building niche sites.
