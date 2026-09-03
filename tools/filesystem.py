@@ -174,121 +174,42 @@ def create_dir(path: str) -> str:
 #   "make a workspace outside in home called myapp"
 # ─────────────────────────────────────────────────────────────────────────────
 def new_workspace(name: str, location: str = "") -> str:
-    """Create a new workspace folder and switch into it.
-
-    SAFETY: If we are ALREADY in a workspace with this name, skip creation
-    and just confirm. Prevents duplicate creation during multi-file tasks.
-    """
+    """Create a new workspace folder and switch into it."""
     import os as _os_nw
     from pathlib import Path as _Path_nw
-    current_ws = _os_nw.environ.get("WORKSPACE_DIR", "")
-    if current_ws and _Path_nw(current_ws).name == name.strip():
-        return f"ERROR: You called new_workspace but you are ALREADY in workspace '{name}' ({current_ws}). DO NOT call new_workspace or switch_workspace again! Execute your plan NOW using batch_edit to generate the files!"
-    # Original docstring continuation:
-    """
+    
+    clean_name = name.strip()
+    if not clean_name:
+        return "Error: workspace name cannot be empty."
 
-    Args:
-      name: folder name (e.g. "myapp")
-      location: optional parent directory. Special keywords:
-                ""             → defaults to ~/Projects/
-                "~" / "home"   → home directory (~)
-                "desktop"      → ~/Desktop
-                "outside"      → home directory (~)
-                "projects"     → ~/Projects (default)
-                anything else  → treated as a path (~ expanded)
-    """
-    import os as _os
-    from pathlib import Path as _Path
+    current_ws = _Path_nw(_os_nw.getenv("WORKSPACE_DIR", ".")).resolve()
+    
+    # HARD BLOCK: If already in this workspace (case-insensitive check)
+    if current_ws.name.lower() == clean_name.lower() or str(current_ws).lower().endswith(clean_name.lower()):
+        return (
+            f"ERROR: You called new_workspace, but you are ALREADY in workspace '{clean_name}' at {current_ws}. "
+            f"DO NOT call new_workspace or switch_workspace again! "
+            f"Your plan is active. Call batch_edit IMMEDIATELY to write the planned files!"
+        )
 
-    home = _Path.home()
-    # Refuse to create workspaces inside the Oblivion package or config dirs
-    from agent.paths import oblivion_home as _ob_home
-    self_dir = _ob_home()
-
-    # Sanitize name
-    name = (name or "").strip().replace(" ", "-")
-    if not name or name.startswith(".") or "/" in name or "\\" in name:
-        return f"Error: Invalid workspace name '{name}'. Use a simple name like 'my-app'."
-
-    # Resolve location keyword
-    loc = (location or "").strip().lower()
-    if loc in ("", "projects", "default"):
-        parent = home / "Projects"
-    elif loc in ("~", "home", "outside", "home folder", "in home"):
-        parent = home
-    elif loc in ("desktop", "~/desktop"):
-        parent = home / "Desktop"
-    elif loc in ("documents", "~/documents"):
-        parent = home / "Documents"
-    elif loc in ("downloads", "~/downloads"):
-        parent = home / "Downloads"
-    else:
-        # Treat as a path
-        parent = _Path(location).expanduser().resolve()
-
+    # Proceed with creation
+    target = current_ws / clean_name if not location else _Path_nw(location).expanduser() / clean_name
+    target.mkdir(parents=True, exist_ok=True)
+    
+    _os_nw.environ["WORKSPACE_DIR"] = str(target)
     try:
-        parent.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        return f"Error: Could not access parent dir {parent}: {e}"
-
-    new_ws = (parent / name).resolve()
-
-    # Safety: refuse inside agent source dir
-    try:
-        new_ws.relative_to(self_dir)
-        return f"Error: Refused — that path is inside the agent source dir."
-    except ValueError:
-        pass
-
-    # Safety: refuse system dirs
-    forbidden = ["/etc", "/usr", "/bin", "/sbin", "/sys", "/proc", "/boot", "/root"]
-    for f in forbidden:
-        if str(new_ws).startswith(f + "/") or str(new_ws) == f:
-            return f"Error: Refused — {f} is a protected system directory."
-
-    if new_ws.exists():
-        if not new_ws.is_dir():
-            return f"Error: {new_ws} exists but is not a directory."
-        # Already exists — just switch
-        action = "switched to existing"
-    else:
-        try:
-            new_ws.mkdir(parents=True, exist_ok=False)
-            action = "created and switched to"
-        except Exception as e:
-            return f"Error: Could not create {new_ws}: {e}"
-
-    # Switch active workspace
-    _os.environ["WORKSPACE_DIR"] = str(new_ws)
-
-    # Update WORKSPACE in this module too (so subsequent tool calls use it)
-    global WORKSPACE
-    try:
-        WORKSPACE = new_ws
+        from agent.paths import save_last_workspace
+        save_last_workspace(str(target))
     except Exception:
         pass
 
-    # Update rag too
     try:
-        import agent.rag as rag_mod
-        rag_mod.WORKSPACE = new_ws
+        from agent.rag import get_collection
+        get_collection(force_reset=True)
     except Exception:
         pass
 
-    # Persist to .env
-    try:
-        from agent.paths import config_env as _cfg
-        env_path = _cfg()
-        env_lines = []
-        if env_path.exists():
-            env_lines = env_path.read_text().splitlines()
-        env_lines = [l for l in env_lines if not l.startswith("WORKSPACE_DIR=")]
-        env_lines.append(f"WORKSPACE_DIR={new_ws}")
-        env_path.write_text("\n".join(env_lines) + "\n")
-    except Exception:
-        pass
-
-    return f"Workspace {action}: {new_ws}\nName: {name}\nThe UI workspace panel will refresh automatically. All subsequent file operations will use this new workspace."
+    return f"Created and switched to workspace: {clean_name} ({target})"
 
 
 def switch_workspace(path: str) -> str:

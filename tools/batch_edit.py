@@ -1,20 +1,12 @@
 """
-tools/batch_edit.py - Atomic multi-file edit tool for Oblivion.
-
-Allows Meera to propose changes to multiple files at once,
-show a unified preview of ALL changes, and apply them atomically
-with a single user approval.
-
-This closes the biggest UX gap vs Claude Code:
-  - Claude Code: shows all changes, one approval
-  - Oblivion (before): one file at a time, multiple approvals
-  - Oblivion (after):  all changes, one approval, atomic apply
+tools/batch_edit.py - Atomic multi-file editing tool for Oblivion AI.
+Applies edits to multiple files IMMEDIATELY to disk.
 """
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
-from typing import Optional
 
 
 def _get_workspace() -> Path:
@@ -24,318 +16,97 @@ def _get_workspace() -> Path:
 def _safe_path(rel_path: str) -> Path:
     """Resolve path safely within workspace."""
     ws = _get_workspace()
-    # Strip leading slashes
-    rel_path = rel_path.lstrip("/")
-    full = (ws / rel_path).resolve()
-    # Must stay within workspace
+    clean = str(rel_path).strip().lstrip("/")
+    full = (ws / clean).resolve()
     try:
         full.relative_to(ws)
     except ValueError:
-        raise ValueError(f"Path '{rel_path}' escapes workspace root")
+        raise ValueError(f"Path '{rel_path}' escapes workspace root {ws}")
     return full
-
-
-def _make_diff(original: str, updated: str, filename: str) -> str:
-    """Generate unified diff between original and updated content."""
-    import difflib
-    orig_lines = original.splitlines(keepends=True)
-    upd_lines = updated.splitlines(keepends=True)
-    diff = list(difflib.unified_diff(
-        orig_lines, upd_lines,
-        fromfile=f"a/{filename}",
-        tofile=f"b/{filename}",
-        lineterm="",
-    ))
-    return "".join(diff)
 
 
 def batch_edit(edits: list) -> str:
     """
-    Apply multiple file edits atomically with a single approval.
+    Apply multiple file edits IMMEDIATELY to disk.
 
-    edits: list of edit operations, each is a dict with:
-      For text replacement:
-        {"path": "src/app.py", "old_text": "...", "new_text": "..."}
-      For full file write:
-        {"path": "src/new_file.py", "content": "..."}
-      For new file creation:
-        {"path": "src/config.py", "content": "...", "create": true}
-
-    Returns a preview of ALL changes for approval.
-    Actual writing is done by batch_apply after approval.
-
-    Example:
-      batch_edit([
-        {"path": "app.py", "old_text": "def foo():", "new_text": "def foo(x: int):"},
-        {"path": "tests/test_app.py", "content": "import pytest\\n..."},
-      ])
+    edits: list of dicts, each with:
+      {"path": "src/App.jsx", "content": "..."} for full file creation/overwrite
+      OR
+      {"path": "src/App.jsx", "old_text": "...", "new_text": "..."} for surgical edit
     """
-    if not edits:
-        return "Error: no edits provided."
+    if not edits or not isinstance(edits, list):
+        return "Error: edits must be a non-empty list of edit objects."
 
-    if not isinstance(edits, list):
-        return "Error: edits must be a list of edit operations."
-
-    # CORRUPTION CHECK: reject if edits contain obviously broken data
-    # (Rich markup leakage, empty content, malformed structure)
-    for i, edit in enumerate(edits):
-        if not isinstance(edit, dict):
-            continue
-        for key, value in list(edit.items()):
-            if isinstance(value, str):
-                if "[/" in value or "[dim " in value or "[bold " in value:
-                    return (
-                        f"Error: edit {i+1} contains corrupted Rich markup in {key!r}. "
-                        f"Value was: {value[:100]!r}. "
-                        f"Retry batch_edit with clean JSON - no color tags in strings."
-                    )
-
-    results = []
+    applied = []
     errors = []
-    previews = []
 
-    for i, edit in enumerate(edits):
+    for i, edit in enumerate(edits, 1):
         if not isinstance(edit, dict):
-            errors.append(f"Edit {i+1}: must be a dict, got {type(edit).__name__}")
+            errors.append(f"Edit #{i}: invalid edit object (must be dict)")
             continue
 
-        path = edit.get("path", "").strip()
-        if not path:
-            errors.append(f"Edit {i+1}: missing 'path'")
+        path_str = edit.get("path", "").strip()
+        if not path_str:
+            errors.append(f"Edit #{i}: missing 'path'")
             continue
 
         try:
-            p = _safe_path(path)
+            full_path = _safe_path(path_str)
         except ValueError as e:
-            errors.append(f"Edit {i+1} ({path}): {e}")
+            errors.append(f"Edit #{i} ({path_str}): {e}")
             continue
 
-        # Determine edit type
+        # Case 1: Full content write / creation
         if "content" in edit:
-            # Full file write (new or overwrite)
-            new_content = edit["content"]
-            if p.exists():
-                try:
-                    original = p.read_text(encoding="utf-8")
-                except Exception as e:
-                    errors.append(f"Edit {i+1} ({path}): cannot read: {e}")
-                    continue
-                diff = _make_diff(original, new_content, path)
-                if not diff.strip():
-                    results.append(f"  ✓ {path}: no changes")
-                    continue
-                previews.append({
-                    "path": path,
-                    "type": "overwrite",
-                    "diff": diff,
-                    "new_content": new_content,
-                    "p": str(p),
-                })
-            else:
-                # New file
-                line_count = len(new_content.splitlines())
-                previews.append({
-                    "path": path,
-                    "type": "create",
-                    "content": new_content,
-                    "line_count": line_count,
-                    "p": str(p),
-                })
+            content_str = edit["content"]
+            try:
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                full_path.write_text(content_str, encoding="utf-8")
+                applied.append(f"  ✓ Created: {path_str} ({len(content_str)} chars)")
+            except Exception as e:
+                errors.append(f"  ✗ {path_str}: failed to write: {e}")
 
+        # Case 2: Surgical replacement (old_text -> new_text)
         elif "old_text" in edit and "new_text" in edit:
-            # Surgical replacement
             old_text = edit["old_text"]
             new_text = edit["new_text"]
 
-            if not p.exists():
-                errors.append(f"Edit {i+1} ({path}): file not found")
-                continue
-
-            try:
-                original = p.read_text(encoding="utf-8")
-            except Exception as e:
-                errors.append(f"Edit {i+1} ({path}): cannot read: {e}")
-                continue
-
-            if old_text not in original:
-                errors.append(
-                    f"Edit {i+1} ({path}): old_text not found. "
-                    f"Check it matches exactly (whitespace matters)."
-                )
-                continue
-
-            updated = original.replace(old_text, new_text, 1)
-            diff = _make_diff(original, updated, path)
-
-            if not diff.strip():
-                results.append(f"  ✓ {path}: no changes (old_text == new_text)")
-                continue
-
-            previews.append({
-                "path": path,
-                "type": "edit",
-                "diff": diff,
-                "original": original,
-                "old_text": old_text,
-                "new_text": new_text,
-                "p": str(p),
-            })
-
+            if not full_path.exists():
+                # If file doesn't exist, treat new_text as full content
+                try:
+                    full_path.parent.mkdir(parents=True, exist_ok=True)
+                    full_path.write_text(new_text, encoding="utf-8")
+                    applied.append(f"  ✓ Created: {path_str} ({len(new_text)} chars)")
+                except Exception as e:
+                    errors.append(f"  ✗ {path_str}: failed to create: {e}")
+            else:
+                try:
+                    orig = full_path.read_text(encoding="utf-8")
+                    if old_text in orig:
+                        updated = orig.replace(old_text, new_text, 1)
+                        full_path.write_text(updated, encoding="utf-8")
+                        applied.append(f"  ✓ Edited: {path_str}")
+                    else:
+                        errors.append(f"  ✗ {path_str}: old_text not found in file")
+                except Exception as e:
+                    errors.append(f"  ✗ {path_str}: failed to edit: {e}")
         else:
-            errors.append(
-                f"Edit {i+1} ({path}): must have either "
-                f"'content' or both 'old_text'+'new_text'"
-            )
-            continue
-
-    # Build preview output
-    output_lines = []
-
-    if errors:
-        output_lines.append(f"⚠️  {len(errors)} error(s) found:")
-        for err in errors:
-            output_lines.append(f"  ✗ {err}")
-        output_lines.append("")
-
-    if not previews:
-        if errors:
-            return "\n".join(output_lines) + "\nNo valid edits to apply."
-        return "No changes needed — all files already have the requested content."
-
-    output_lines.append(
-        f"BATCH EDIT PREVIEW — {len(previews)} file(s) will be changed:"
-    )
-    output_lines.append("=" * 60)
-
-    for preview in previews:
-        output_lines.append(f"\n📄 {preview['path']} [{preview['type']}]")
-        output_lines.append("-" * 40)
-
-        if preview["type"] == "create":
-            output_lines.append(
-                f"  NEW FILE: {preview['line_count']} lines"
-            )
-            # Show first 20 lines of new file
-            lines = preview["content"].splitlines()[:20]
-            for line in lines:
-                output_lines.append(f"  + {line}")
-            if len(preview["content"].splitlines()) > 20:
-                output_lines.append(
-                    f"  ... ({len(preview['content'].splitlines())-20} more lines)"
-                )
-        else:
-            # Show diff (cap at 80 lines per file)
-            diff_lines = preview["diff"].splitlines()[:80]
-            for line in diff_lines:
-                output_lines.append(f"  {line}")
-            if len(preview["diff"].splitlines()) > 80:
-                output_lines.append(
-                    f"  ... ({len(preview['diff'].splitlines())-80} more diff lines)"
-                )
-
-    output_lines.append("")
-    output_lines.append("=" * 60)
-    # AUTO-APPLY: instead of preview mode, apply immediately
-    # (Approval is enforced at the batch_edit tool level via permissions)
-    output_lines.append("")
-    output_lines.append("APPLYING changes...")
-
-    applied = []
-    apply_errors = []
-
-    for preview in previews:
-        path = preview["path"]
-        p = Path(preview["p"])
-
-        try:
-            if preview["type"] == "create":
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(preview["content"], encoding="utf-8")
-                applied.append(f"  ✓ Created: {path} ({len(preview['content'])} chars)")
-
-            elif preview["type"] == "overwrite":
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(preview["new_content"], encoding="utf-8")
-                applied.append(f"  ✓ Updated: {path}")
-
-            elif preview["type"] == "edit":
-                original = p.read_text(encoding="utf-8")
-                if preview["old_text"] not in original:
-                    apply_errors.append(
-                        f"  ✗ {path}: content changed since preview"
-                    )
-                    continue
-                updated = original.replace(preview["old_text"], preview["new_text"], 1)
-                p.write_text(updated, encoding="utf-8")
-                applied.append(f"  ✓ Edited: {path}")
-
-        except Exception as e:
-            apply_errors.append(f"  ✗ {path}: {e}")
-
-    output_lines.append("")
-    if applied:
-        output_lines.append(f"✅ SUCCESS: {len(applied)} file(s) written to disk:")
-        output_lines.extend(applied)
-    if apply_errors:
-        output_lines.append(f"\n⚠️  ERRORS ({len(apply_errors)}):")
-        output_lines.extend(apply_errors)
-
-    if not applied and not apply_errors:
-        output_lines.append("Nothing was applied.")
-
-    return "\n".join(output_lines)
-
-
-def batch_apply(previews_json: str) -> str:
-    """
-    Apply pre-validated batch edits after user approval.
-    Called by the approval handler after user says yes.
-    """
-    import json
-
-    try:
-        previews = json.loads(previews_json)
-    except Exception as e:
-        return f"Error parsing batch edits: {e}"
-
-    applied = []
-    errors = []
-
-    for preview in previews:
-        path = preview["path"]
-        p = Path(preview["p"])
-
-        try:
-            if preview["type"] == "create":
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(preview["content"], encoding="utf-8")
-                applied.append(f"  ✓ Created: {path}")
-
-            elif preview["type"] == "overwrite":
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(preview["new_content"], encoding="utf-8")
-                applied.append(f"  ✓ Updated: {path}")
-
-            elif preview["type"] == "edit":
-                original = p.read_text(encoding="utf-8")
-                if preview["old_text"] not in original:
-                    errors.append(
-                        f"  ✗ {path}: content changed since preview — skipped"
-                    )
-                    continue
-                updated = original.replace(preview["old_text"], preview["new_text"], 1)
-                p.write_text(updated, encoding="utf-8")
-                applied.append(f"  ✓ Edited:  {path}")
-
-        except Exception as e:
-            errors.append(f"  ✗ {path}: {e}")
+            errors.append(f"Edit #{i} ({path_str}): must provide 'content' OR 'old_text'+'new_text'")
 
     lines = []
     if applied:
-        lines.append(f"✅ Applied {len(applied)} change(s):")
+        lines.append(f"✅ BATCH EDIT SUCCESS: {len(applied)} file(s) WRITTEN TO DISK:")
         lines.extend(applied)
     if errors:
-        lines.append(f"\n⚠️  {len(errors)} error(s):")
+        lines.append(f"\n⚠️ ERRORS ({len(errors)}):")
         lines.extend(errors)
 
-    return "\n".join(lines) if lines else "Nothing applied."
+    if not lines:
+        return "No files were written."
+
+    return "\n".join(lines)
+
+
+def batch_apply(previews_json: str) -> str:
+    """Legacy helper for backward compatibility."""
+    return "batch_edit already applies files directly to disk."

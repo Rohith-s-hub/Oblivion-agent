@@ -17,10 +17,7 @@ class FinalAnswer:
 
 
 def extract_json_object(text: str, start: int) -> str | None:
-    """
-    Extract a complete JSON object starting at position `start`.
-    Handles nested braces correctly by counting open/close.
-    """
+    """Extract a complete JSON object starting at position start by tracking brace depth."""
     if start >= len(text) or text[start] != "{":
         return None
 
@@ -56,29 +53,17 @@ def extract_json_object(text: str, start: int) -> str | None:
     return None
 
 
-
 def clean_thought(thought: str) -> str:
     """Remove leaked system prompt fragments from thought text."""
-    # Strip anything that looks like quoted system prompt (actual newlines)
     thought = re.sub(
         r'^["\']?\n\n.*?(?=The user|I\b|Let me|First|Now|Based)',
         '', thought, flags=re.DOTALL
     )
-    # Strip leading newlines/quotes
-    thought = thought.strip().strip('"').strip("'").strip()
-    return thought
-
-
-# HARDENED_PARSER_V1
-# - Strips fake OBSERVATION/User/Assistant blocks the LLM tries to inject
-# - ACTION beats FINAL_ANSWER (never let LLM hallucinate completion)
-# - Strict ACTION pattern (must be followed by JSON)
+    return thought.strip().strip('"').strip("'").strip()
 
 
 def _strip_fake_observations(text: str) -> str:
-    """Remove any OBSERVATION/User:/Assistant: blocks the LLM tries to inject.
-    Real observations are appended by the agent loop, NEVER by the LLM."""
-    # Cut at the FIRST fake injection marker
+    """Cut off fake OBSERVATION/User/Assistant blocks injected by LLM."""
     markers = [
         r"\n\s*OBSERVATION\s*\(",
         r"\n\s*OBSERVATION:",
@@ -95,12 +80,37 @@ def _strip_fake_observations(text: str) -> str:
     return text[:earliest].rstrip()
 
 
+def _robust_json_loads(json_str: str) -> dict | None:
+    """Tolerant JSON parser that handles raw newlines, control chars, and minor syntax flaws."""
+    if not json_str:
+        return None
+
+    try:
+        data = json.loads(json_str, strict=False)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+
+    try:
+        cleaned = re.sub(r',\s*([}\]])', r'\1', json_str)
+        data = json.loads(cleaned, strict=False)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+
+    return None
+
+
 def parse_llm_output(text: str):
-    # Strip <think>...</think> blocks (Qwen/DeepSeek thinking tokens)
+    if not text or not text.strip():
+        return None
+
+    # Strip thinking blocks
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
-    # STRIP RICH MARKUP that models sometimes hallucinate in tool JSON
-    # e.g. {"path": "contact.html", "con[/dim cyan]"}  ← breaks JSON parsing
+    # Strip Rich markup tags leaked into output
     _rich_patterns = [
         r"\[/[^\]]*\]",
         r"\[(?:dim|bold|italic|underline)(?:\s+[^\]]*)?\]",
@@ -109,49 +119,41 @@ def parse_llm_output(text: str):
     for pat in _rich_patterns:
         text = re.sub(pat, "", text)
 
-    # CRITICAL: strip fake injected observations BEFORE looking for actions/answers
+    # Cut off fake observations
     text = _strip_fake_observations(text)
 
     # ── THOUGHT ──────────────────────────────────────────────────────────────
     thought = ""
-    m = re.search(r"THOUGHT:\s*(.+?)(?=\nACTION:|\nFINAL_ANSWER:|$)", text, re.IGNORECASE | re.DOTALL)
+    m = re.search(r"THOUGHT:\s*(.+?)(?=\nACTION:|ACTION:|\nFINAL_ANSWER:|$)", text, re.IGNORECASE | re.DOTALL)
     if m:
         thought = clean_thought(m.group(1))
 
     # ── ACTION FIRST (BEATS FINAL_ANSWER) ────────────────────────────────────
-    # Strict pattern: ACTION: followed by optional whitespace + opening brace
-    action_match = re.search(r"ACTION:\s*(?=\{)", text, re.IGNORECASE)
+    # Handles ACTION:\n```json\n{...}\n``` or ACTION:\n{...}
+    action_match = re.search(r"ACTION:\s*(?:```(?:json)?\s*)?(\{)", text, re.IGNORECASE)
     if action_match:
-        brace_start = text.find("{", action_match.end())
-        if brace_start != -1:
-            json_str = extract_json_object(text, brace_start)
-            if json_str:
-                try:
-                    data = json.loads(json_str)
-                    if "tool" in data:
-                        return ToolCall(
-                            tool=data.get("tool", ""),
-                            args=data.get("args", {}),
-                            thought=thought,
-                        )
-                except json.JSONDecodeError:
-                    pass
+        brace_start = action_match.start(1)
+        json_str = extract_json_object(text, brace_start)
+        if json_str:
+            data = _robust_json_loads(json_str)
+            if data and "tool" in data:
+                return ToolCall(
+                    tool=data.get("tool", ""),
+                    args=data.get("args", {}) if isinstance(data.get("args"), dict) else {},
+                    thought=thought,
+                )
 
     # ── FINAL_ANSWER (only if no ACTION was parsed) ──────────────────────────
     for pattern in [r"FINAL_ANSWER:\s*(.+)", r"ANSWER:\s*(.+)", r"DONE:\s*(.+)"]:
         match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
         if match:
             content = match.group(1).strip()
-            # Also strip any fake continuation inside FINAL_ANSWER itself
             content = _strip_fake_observations(content)
-            # STRIP LEAKED FORMAT MARKERS (so UI never shows "THOUGHT:" or "ACTION:")
             content = re.sub(r"^\s*THOUGHT\s*:.*?(?=\n\n|\Z)", "", content, flags=re.IGNORECASE | re.DOTALL).strip()
             content = re.sub(r"^\s*ACTION\s*:.*?(?=\n\n|\Z)", "", content, flags=re.IGNORECASE | re.DOTALL).strip()
             return FinalAnswer(content=content)
 
-    # ── Fallback: scan entire text for any JSON with "tool" key ──────────────
-    # GUARD: only scan if no FINAL_ANSWER marker present
-    # Prevents misfiring on JSON examples inside a final answer
+    # ── FALLBACK SCAN: Search entire text for any JSON with "tool" key ───────
     if not re.search(r"FINAL_ANSWER:", text, re.IGNORECASE):
         brace_pos = 0
         while True:
@@ -160,30 +162,22 @@ def parse_llm_output(text: str):
                 break
             json_str = extract_json_object(text, brace_pos)
             if json_str:
-                try:
-                    data = json.loads(json_str)
-                    if "tool" in data and isinstance(data.get("args"), dict):
-                        return ToolCall(
-                            tool=data.get("tool", ""),
-                            args=data.get("args", {}),
-                            thought=thought,
-                        )
-                except json.JSONDecodeError:
-                    pass
+                data = _robust_json_loads(json_str)
+                if data and "tool" in data and isinstance(data.get("args"), dict):
+                    return ToolCall(
+                        tool=data.get("tool", ""),
+                        args=data.get("args", {}),
+                        thought=thought,
+                    )
             brace_pos += 1
 
-    # ── No ACTION found — treat as final answer if there is content ──────────
-    if len(text) > 20 and "ACTION" not in text.upper():
-        # Strip leaked THOUGHT: prefix even in fallback mode
-        # Handles both "THOUGHT: ...\n..." AND "THOUGHT: ..." (no newline, whole thing is thought)
+    # ── LAST RESORT: Treat as final answer if non-empty text ───────────────
+    if len(text) > 15 and "ACTION" not in text.upper():
         cleaned_text = text
-        # Pattern A: THOUGHT: followed by content then a newline then more content
         m = re.match(r"\s*THOUGHT\s*:\s*(.+?)\n(.+)", cleaned_text, re.IGNORECASE | re.DOTALL)
         if m:
-            # Keep only the part AFTER the thought line
             cleaned_text = m.group(2).strip()
         else:
-            # Pattern B: entire text is "THOUGHT: ..." — strip the prefix, keep the content
             m2 = re.match(r"\s*THOUGHT\s*:\s*(.+)", cleaned_text, re.IGNORECASE | re.DOTALL)
             if m2:
                 cleaned_text = m2.group(1).strip()
@@ -195,20 +189,11 @@ def parse_llm_output(text: str):
 
 
 def is_garbage_output(text: str) -> bool:
-    """Detect when LLM produces non-sense repetitive characters (context overflow symptom).
-    
-    Examples of garbage:
-      "====================" (repeated equals)
-      "////////////////////" (repeated slashes)
-      "                    " (just whitespace)
-    """
     if not text or len(text) < 20:
         return False
-    # Strip whitespace
     stripped = text.strip()
     if not stripped:
         return True
-    # Check if >70% is a single repeating char
     counts = Counter(stripped)
     most_common_char, most_common_count = counts.most_common(1)[0]
     ratio = most_common_count / len(stripped)

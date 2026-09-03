@@ -1,31 +1,29 @@
 """
-agent/runtime.py — Unified Async Agent Runtime (Phase 2A)
-
-Single source of truth for the agent's THOUGHT → ACTION → OBSERVATION loop.
-Both the CLI and the TUI delegate to AgentRuntime.run_async().
-
-The runtime emits events via callbacks so the UI layer can:
-  - render streamed tokens
-  - render tool calls + results
-  - request approval for write/edit/bash
-  - render the final answer
-  - trigger voice playback
-without ever touching the core loop logic.
-
-Side benefits baked in:
-  - Per-session JSONL log at ~/.oblivion/sessions/<session_id>.jsonl
-  - Tool timing (ms) surfaced via on_tool_done callback
+agent/runtime.py — Patched & Stabilized Async Agent Runtime (Phase 2A)
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
+from agent.plan_guard import (
+    is_approval_message, claims_files_created,
+    set_plan_approved, is_plan_approved,
+    try_save_plan_from_llm_output,
+    missing_files,
+    existing_planned_files,
+    rejection_message_for_missing,
+    approval_directive,
+    load_plan,
+    clear_plan,
+    workspace_root,
+)
 from agent.parser import parse_llm_output, ToolCall, FinalAnswer, is_garbage_output
 from agent.brain import compress_conversation, needs_compression, summarize_via_llm
 from tools.registry import dispatch
@@ -34,7 +32,6 @@ from agent.models import get_context_limit, get_rate_delay
 
 
 def _estimate_tokens(messages: list) -> int:
-    """Rough token count: ~4 chars = 1 token."""
     total = 0
     for m in messages:
         c = m.get("content", "")
@@ -43,38 +40,56 @@ def _estimate_tokens(messages: list) -> int:
     return total
 
 
+def parse_and_save_plan(text: str, workspace_path: Path) -> bool:
+    """Extracts plans structured as 1. <filename> and saves to plan.json."""
+    plan_idx = text.find("PLAN:")
+    if plan_idx == -1:
+        plan_idx = text.find("Plan:")
+    if plan_idx == -1:
+        return False
+
+    plan_text = text[plan_idx:]
+    steps = []
+    # Matches lines like: 1. filename - description
+    for line in plan_text.splitlines():
+        match = re.match(r"^\s*\d+[\s.)\]\[\-]+([\w./\-_]+\.\w+)\s*[-—:\s]*(.*)", line.strip())
+        if match:
+            file_path = match.group(1).strip()
+            desc = match.group(2).strip()
+            file_path = file_path.lstrip("./").lstrip("/")
+            steps.append({"path": file_path, "purpose": desc})
+
+    if steps:
+        plan_dir = workspace_path / ".oblivion"
+        plan_dir.mkdir(exist_ok=True, parents=True)
+        with open(plan_dir / "plan.json", "w", encoding="utf-8") as f:
+            json.dump({"steps": steps}, f, indent=2)
+        return True
+    return False
+
+
 def _summarize_conversation(conversation: list, keep_recent: int = 4) -> list:
-    """Compress conversation: keep first user msg + summarize middle + keep last N turns.
-    
-    Returns new conversation list. Original is unchanged.
-    """
     if len(conversation) <= keep_recent + 1:
-        return conversation  # too short to summarize
+        return conversation
 
-    first_user = conversation[0]  # the original user task
-    recent = conversation[-keep_recent:]  # last N turns
-    middle = conversation[1:-keep_recent]  # to be summarized
+    first_user = conversation[0]
+    recent = conversation[-keep_recent:]
+    middle = conversation[1:-keep_recent]
 
-    # Extract key facts from middle
-    summary_parts = []
     files_touched = set()
     tools_used = {}
+    summary_parts = []
     for msg in middle:
         c = msg.get("content", "")
         if not isinstance(c, str):
             continue
-        # Tool observations
         if c.startswith("OBSERVATION"):
-            # Extract filenames
-            import re
             for m in re.finditer(r"(?:Written|Created|Edited|Read).+?([\w./\-_]+\.\w+)", c):
                 files_touched.add(m.group(1))
             for m in re.finditer(r"(?:result of )(\w+)", c):
                 t = m.group(1)
                 tools_used[t] = tools_used.get(t, 0) + 1
-        # Agent THOUGHTs
         elif "THOUGHT:" in c:
-            import re
             m = re.search(r"THOUGHT:\s*(.+?)(?:\n|ACTION|FINAL)", c, re.DOTALL)
             if m:
                 summary_parts.append(m.group(1).strip()[:120])
@@ -86,19 +101,16 @@ def _summarize_conversation(conversation: list, keep_recent: int = 4) -> list:
         summary_text += "Tools used so far: " + ", ".join(f"{k}({v})" for k, v in sorted(tools_used.items())) + "\n"
     if summary_parts:
         summary_text += "Key decisions:\n" + "\n".join(f"- {s}" for s in summary_parts[-8:]) + "\n"
-    summary_text += "\nResume from current state. Do NOT redo what is listed above."
 
     summary_msg = {"role": "user", "content": summary_text}
-
     return [first_user, summary_msg] + recent
 
-# ── Session log ──────────────────────────────────────────────────────────────
+
 from agent.paths import sessions_dir as _sessions_dir
 SESSIONS_DIR = _sessions_dir()
 
 
 def _log_event(session_id: int, kind: str, data: dict) -> None:
-    """Append one JSON line to the session log. Best-effort; never raises."""
     try:
         path = SESSIONS_DIR / f"{session_id}.jsonl"
         entry = {"ts": time.time(), "kind": kind, **data}
@@ -108,47 +120,25 @@ def _log_event(session_id: int, kind: str, data: dict) -> None:
         pass
 
 
-# ── Callback contract ────────────────────────────────────────────────────────
 @dataclass
 class RuntimeCallbacks:
-    """All UI hooks. Any callback can be None — runtime will no-op it."""
-
-    # Streaming: called per token while the LLM is producing output
     on_token: Optional[Callable[[str], None]] = None
-
-    # Step lifecycle
-    on_llm_start: Optional[Callable[[int], Awaitable[None]]] = None        # step_idx
-    on_llm_end:   Optional[Callable[[int, str, int], Awaitable[None]]] = None  # step_idx, output, tokens
-
-    # Tool lifecycle
-    on_thought:   Optional[Callable[[str], Awaitable[None]]] = None        # thought text
-    on_tool_start: Optional[Callable[[str, dict], Awaitable[Any]]] = None  # name, args -> handle (e.g. ActivityItem)
-    on_tool_done:  Optional[Callable[[Any, str, int], Awaitable[None]]] = None  # handle, result, ms
-
-    # Final / errors
+    on_llm_start: Optional[Callable[[int], Awaitable[None]]] = None
+    on_llm_end:   Optional[Callable[[int, str, int], Awaitable[None]]] = None
+    on_thought:   Optional[Callable[[str], Awaitable[None]]] = None
+    on_tool_start: Optional[Callable[[str, dict], Awaitable[Any]]] = None
+    on_tool_done:  Optional[Callable[[Any, str, int], Awaitable[None]]] = None
     on_final: Optional[Callable[[str], Awaitable[None]]] = None
     on_error: Optional[Callable[[str], Awaitable[None]]] = None
     on_parse_failure: Optional[Callable[[str], Awaitable[None]]] = None
-
-    # APPROVAL — UI must implement this for write/edit/bash safety
-    # Returns True to approve, False to deny. If None, auto-approves.
     on_approve_tool: Optional[Callable[[str, dict], Awaitable[bool]]] = None
 
 
-# ── Runtime ──────────────────────────────────────────────────────────────────
 class AgentRuntime:
-    """The single agent loop. UI-agnostic."""
-
-    def __init__(self, agent, session_id: int, max_iterations: int = 15):
-        """
-        agent: an instance of agent.core.Agent (we use agent.llm, agent.system_prompt, agent.conversation)
-        session_id: int from db.store.create_session
-        """
+    def __init__(self, agent, session_id: int, max_iterations: int = 40):
         self.agent = agent
         self.session_id = session_id
         self.max_iterations = max_iterations
-
-        # Permission tiers (v3)
         self.session_state = {"auto_mode": False, "trusted_tools": set()}
 
     async def run_async(
@@ -156,10 +146,8 @@ class AgentRuntime:
         user_message: str,
         callbacks: RuntimeCallbacks,
     ) -> Optional[str]:
-        """Run one full user-turn. Returns the final-answer text, or None on error."""
         cb = callbacks
 
-                # Clarify context when user approves a plan so LLM doesn't anchor to old messages
         _clean_input = user_message.strip().lower()
         if _clean_input in ("yes", "y", "go", "proceed", "do it", "approved", "sure", "ok"):
             _last_asst = ""
@@ -168,38 +156,54 @@ class AgentRuntime:
                     _last_asst = _m.get("content", "")
                     break
             if "PLAN:" in _last_asst or "Approve this plan?" in _last_asst:
-                user_message = f"{user_message} (Plan approved. Proceed immediately to batch_edit to write all planned files. Do not switch workspaces.)"
+                user_message = f"{user_message} (Plan approved. Proceed immediately to batch_edit to write all planned files.)"
 
-        # AUTOMATIC CONTEXT PRUNING FOR NEW MAJOR TASKS
-        # If user starts a major build task and history is > 10 msgs, prune old context
-        _msg_low = user_message.lower()
-        _is_major_build = any(kw in _msg_low for kw in ["create", "build", "scaffold", "make a website", "make an app", "new project"])
-        if _is_major_build and len(self.agent.conversation) > 8:
-            # Keep original task + last 2 turns, prune old debugging/error turns
-            first_user = self.agent.conversation[0]
-            recent_turns = self.agent.conversation[-4:]
-            pruned_summary = {
-                "role": "user",
-                "content": "[SYSTEM CONTEXT RESET: User started a new major project request. Past debugging context cleared. Focus exclusively on the new user request.]"
-            }
-            self.agent.conversation = [first_user, pruned_summary] + recent_turns
-            _log_event(self.session_id, "context_pruned_for_new_task", {})
+        
+
+        # PLAN APPROVAL: yes OR "create every file"
+        if is_approval_message(user_message):
+            try:
+                _ws = workspace_root()
+                for _m in reversed(self.agent.conversation):
+                    if _m.get("role") == "assistant":
+                        try_save_plan_from_llm_output(_m.get("content") or "", _ws)
+                        break
+                set_plan_approved(True, _ws)
+                self._force_tool_strikes = 0
+                self._session_write_count = 0
+                _miss = missing_files(_ws)
+                _plan = load_plan(_ws)
+                if _miss:
+                    _extra = approval_directive(_miss, _plan)
+                    _extra += "\n\nCRITICAL: Call batch_edit or write_file. "
+                    _extra += "FINAL_ANSWER without real tool writes is FORBIDDEN."
+                    user_message = user_message + "\n\n" + _extra
+            except Exception as _e:
+                try:
+                    _log_event(self.session_id, "plan_approval_hook_err", {"err": str(_e)})
+                except Exception:
+                    pass
+
 
         self.agent.conversation.append({"role": "user", "content": user_message})
-        # Refresh system prompt with knowledge packs relevant to this user request
+        
         try:
             self.agent.refresh_prompt(user_message)
         except Exception:
-            pass  # best-effort; never break the loop
+            pass
 
-        # Note: previously auto-switched to Gemini for websites, but this
-        # caused quota exhaustion cascades. Now we trust the user's chosen
-        # model and rely on FALLBACK_CHAIN for reliability.
         _log_event(self.session_id, "user_message", {"content": user_message})
 
-        # LOOP DETECTION: track recent tool calls to catch the agent repeating itself
         recent_calls: list[str] = []
-        consecutive_reads = 0  # exploration loop guard
+        consecutive_reads = 0
+
+        # ── STUCK-OUTPUT CIRCUIT BREAKERS ──────────────────────────────
+        # Detects the "same chars/tokens forever" death spiral from the screenshot
+        _prev_out_sizes: list[tuple[int, int]] = []   # [(chars, tokens), ...]
+        _prev_out_hashes: list[str] = []               # content fingerprints
+        _steps_without_write = 0                       # progress stall counter
+        _last_written_files: set = set()
+        _files_written_this_run: dict = {}             # path -> times written
 
         for i in range(self.max_iterations):
             step = i + 1
@@ -210,85 +214,127 @@ class AgentRuntime:
                 except Exception:
                     pass
 
-            # AUTO-SUMMARIZATION: compress based on model actual context window
+            # Auto-compress history
             est_tokens = _estimate_tokens(self.agent.conversation)
             _ctx_limit = get_context_limit(self.agent.llm.model)
-            # Compress at 60% of model context limit (leaves room for system prompt + response)
-            _compress_at = max(6_000, int(_ctx_limit * 0.60))
+            _compress_at = max(6000, int(_ctx_limit * 0.60))
             if est_tokens > _compress_at and len(self.agent.conversation) > 6:
-                original_count = len(self.agent.conversation)
                 self.agent.conversation = _summarize_conversation(self.agent.conversation, keep_recent=4)
-                new_count = len(self.agent.conversation)
-                new_tokens = _estimate_tokens(self.agent.conversation)
-                _log_event(self.session_id, "summarized", {
-                    "before_msgs": original_count, "after_msgs": new_count,
-                    "before_tokens": est_tokens, "after_tokens": new_tokens,
-                })
-                if cb.on_thought:
-                    try:
-                        await cb.on_thought(
-                            "[context compressed: " + str(original_count) + " msgs / " +
-                            str(est_tokens) + " tok -> " + str(new_count) + " msgs / " +
-                            str(new_tokens) + " tok]"
-                        )
-                    except Exception:
-                        pass
 
-            # ── CONTEXT COMPRESSION ───────────────────────────────────────
-            # Only runs if the fast local compressor above did NOT already run.
-            # elif prevents double-compression in the same iteration.
-            elif needs_compression(self.agent.conversation):
-                try:
-                    def _summary_fn(text):
-                        return summarize_via_llm(self.agent.llm, text)
-                    before_count = len(self.agent.conversation)
-                    self.agent.conversation = compress_conversation(
-                        self.agent.conversation,
-                        summarize_fn=_summary_fn,
-                    )
-                    after_count = len(self.agent.conversation)
-                    _log_event(self.session_id, "context_compressed", {
-                        "step": step,
-                        "before_msgs": before_count,
-                        "after_msgs": after_count,
-                    })
-                except Exception as e:
-                    _log_event(self.session_id, "compression_error", {
-                        "step": step, "error": str(e)[:200],
-                    })
-
+            # Re-read or sync plan
+            ws_dir = Path(os.getenv("WORKSPACE_DIR", ".")).resolve()
+            
             messages = [
                 {"role": "system", "content": self.agent.system_prompt}
             ] + self.agent.conversation
 
-            # RATE LIMIT GUARD: delay from model registry (per-model tuned values)
-            _model_id = self.agent.llm.model
-            _delay = get_rate_delay(_model_id)
+            _delay = get_rate_delay(self.agent.llm.model)
             if _delay > 0:
                 time.sleep(_delay)
 
-            # Stream LLM output to UI via callback
             llm_output = await self._stream_llm(messages, cb)
             if llm_output is None:
                 return None
 
-            # Detect context overflow / model meltdown
             if is_garbage_output(llm_output):
-                _log_event(self.session_id, "garbage_output", {
-                    "step": step, "preview": llm_output[:100],
-                })
                 self.agent.conversation.append({
                     "role": "user",
-                    "content": (
-                        "Your last response was unreadable (repeated characters or empty). "
-                        "This usually means context overflow. "
-                        "Give a short FINAL_ANSWER summarizing what you have done so far."
-                    ),
+                    "content": "Your last response was blank or corrupted. Please summarize actions.",
                 })
                 continue
 
+            # Parse and save active plan to disk if detected in output stream
+            parse_and_save_plan(llm_output, ws_dir)
+
             self.agent.conversation.append({"role": "assistant", "content": llm_output})
-            _log_event(self.session_id, "llm_output", {"step": step, "chars": len(llm_output)})
+            # Persist plan whenever model emits one
+            try:
+                try_save_plan_from_llm_output(llm_output or "", workspace_root())
+            except Exception:
+                pass
+
+
+            # ═══════════════════════════════════════════════════════════
+            # STUCK-OUTPUT DETECTOR (fixes identical 1465-token death loop)
+            # ═══════════════════════════════════════════════════════════
+            import hashlib as _hashlib
+            _out_chars = len(llm_output or "")
+            _out_tokens = _out_chars // 4
+            _out_hash = _hashlib.md5((llm_output or "")[:2000].encode("utf-8", errors="ignore")).hexdigest()
+
+            _prev_out_sizes.append((_out_chars, _out_tokens))
+            _prev_out_hashes.append(_out_hash)
+            if len(_prev_out_sizes) > 5:
+                _prev_out_sizes.pop(0)
+                _prev_out_hashes.pop(0)
+
+            # Trap 1: identical token count 3x in a row (your screenshot bug)
+            _size_stuck = (
+                len(_prev_out_sizes) >= 3
+                and _prev_out_sizes[-1][1] == _prev_out_sizes[-2][1] == _prev_out_sizes[-3][1]
+                and _prev_out_sizes[-1][1] > 100  # ignore tiny outputs
+            )
+            # Trap 2: near-identical content hash 2x in a row
+            _content_stuck = (
+                len(_prev_out_hashes) >= 2
+                and _prev_out_hashes[-1] == _prev_out_hashes[-2]
+            )
+            # Trap 3: char count within ±30 of previous 3 outputs
+            _near_size_stuck = False
+            if len(_prev_out_sizes) >= 3:
+                c1, c2, c3 = _prev_out_sizes[-1][0], _prev_out_sizes[-2][0], _prev_out_sizes[-3][0]
+                _near_size_stuck = abs(c1 - c2) <= 30 and abs(c2 - c3) <= 30 and c1 > 500
+
+            if _size_stuck or _content_stuck or _near_size_stuck:
+                _log_event(self.session_id, "stuck_output_loop", {
+                    "step": step,
+                    "chars": _out_chars,
+                    "tokens": _out_tokens,
+                    "size_stuck": _size_stuck,
+                    "content_stuck": _content_stuck,
+                    "near_size_stuck": _near_size_stuck,
+                })
+                # Check what files are still missing from the plan
+                _missing_now = []
+                try:
+                    _pf = ws_dir / ".oblivion" / "plan.json"
+                    if _pf.exists():
+                        _pd = json.loads(_pf.read_text(encoding="utf-8"))
+                        _missing_now = [
+                            s["path"] for s in _pd.get("steps", [])
+                            if not (ws_dir / s["path"]).exists()
+                        ]
+                except Exception:
+                    pass
+
+                if _missing_now:
+                    # Force the model onto a DIFFERENT file — break the repeat pattern
+                    _next_file = _missing_now[0]
+                    _break_msg = (
+                        f"SYSTEM INTERRUPT: You are stuck generating the same ~{_out_tokens}-token "
+                        f"response repeatedly. STOP repeating.\n\n"
+                        f"MISSING FILES: {', '.join(_missing_now)}\n"
+                        f"Your NEXT action MUST be batch_edit or write_file for: `{_next_file}`\n"
+                        f"Write completely NEW content. Do NOT repeat your previous output."
+                    )
+                    self.agent.conversation.append({"role": "user", "content": _break_msg})
+                    _prev_out_sizes.clear()
+                    _prev_out_hashes.clear()
+                    continue
+                else:
+                    # Nothing missing — force finish
+                    _done_msg = (
+                        f"All planned files exist on disk. "
+                        f"Give FINAL_ANSWER summarizing what was built. Do NOT call more tools."
+                    )
+                    self.agent.conversation.append({"role": "user", "content": _done_msg})
+                    _prev_out_sizes.clear()
+                    _prev_out_hashes.clear()
+                    continue
+
+            
+            # Sync system prompt to show updated plan progress checkboxes in system prompt
+            self.agent.refresh_prompt(user_message)
 
             if cb.on_llm_end:
                 try:
@@ -296,68 +342,162 @@ class AgentRuntime:
                 except Exception:
                     pass
 
-            # Parse
+            
             parsed = parse_llm_output(llm_output)
 
-            # ─── Final answer
-            if isinstance(parsed, FinalAnswer):
-                # ── PLAN RECONCILIATION CHECK ──
-                # If a plan was proposed with N files, check that all planned files exist on disk
-                try:
-                    import os as _os_rec
-                    from pathlib import Path as _Path_rec
-                    _ws_rec = _Path_rec(_os_rec.getenv("WORKSPACE_DIR", ".")).resolve()
-                    _planned_files = set()
-                    for _m in self.agent.conversation:
-                        _c = _m.get("content", "")
-                        if isinstance(_c, str) and ("PLAN:" in _c or "Approve this plan?" in _c):
-                            import re as _re_p
-                            for _match in _re_p.finditer(r"\d+\s+([\w./\-_]+\.(?:html|css|js|json|py|ts|jsx|tsx|svg))", _c):
-                                _planned_files.add(_match.group(1).strip())
-                    if _planned_files:
-                        _missing_files = [f for f in _planned_files if not (_ws_rec / f).exists()]
-                        if _missing_files:
-                            _log_event(self.session_id, "plan_reconciliation_missing", {"missing": _missing_files})
-                            _missing_str = ", ".join(_missing_files)
-                            self.agent.conversation.append({"role": "user", "content": _msg})
-                            continue
-                except Exception:
-                    pass
+            # ═══ FORCE_TOOL_GATE_V1 ═══════════════════════════════════════
+            # Missing planned files => model MUST call batch_edit/write_file.
+            try:
+                _ws_ft = workspace_root()
+                try_save_plan_from_llm_output(llm_output or "", _ws_ft)
+                _miss_ft = missing_files(_ws_ft)
+            except Exception:
+                _miss_ft = []
 
-                # ANTI-HALLUCINATION: check if answer claims file creation
-                # without any actual write_file / batch_edit in recent history
-                _answer_lower = parsed.content.lower()
-                _claims_creation = any(kw in _answer_lower for kw in [
-                    "created:", "written:", "generated:", "wrote:",
-                    "have created", "created the", "files created"
-                ])
-                if _claims_creation:
-                    # Look back at last 5 observations for actual file writes
-                    _real_writes = 0
-                    for msg in self.agent.conversation[-10:]:
-                        c = msg.get("content", "")
-                        if isinstance(c, str):
-                            if "Written" in c and "chars to" in c:
-                                _real_writes += 1
-                            if "✓ Created:" in c or "✓ Updated:" in c:
-                                _real_writes += 1
-                    if _real_writes == 0:
-                        # Model is hallucinating! Force verification
-                        _log_event(self.session_id, "hallucination_block", {
-                            "claim": parsed.content[:200],
+            # Only force writes AFTER user approved the plan (said yes).
+            # Plan-only turns must be allowed to FINAL_ANSWER without tools.
+            if _miss_ft and is_plan_approved(_ws_ft):
+                from agent.parser import ToolCall as _TC
+                _is_write = False
+                if isinstance(parsed, _TC):
+                    _tn = (getattr(parsed, "tool", None) or "")
+                    _is_write = _tn in ("batch_edit", "write_file", "edit_file")
+
+                if not _is_write:
+                    if not hasattr(self, "_force_tool_strikes"):
+                        self._force_tool_strikes = 0
+                    self._force_tool_strikes += 1
+                    _next = _miss_ft[0]
+                    _batch = ", ".join(_miss_ft[:3])
+                    _rest = ", ".join(_miss_ft)
+                    try:
+                        _log_event(self.session_id, "force_tool_reject", {
+                            "step": step,
+                            "strikes": self._force_tool_strikes,
+                            "missing": _miss_ft[:10],
+                            "parsed_type": type(parsed).__name__,
                         })
+                    except Exception:
+                        pass
+
+                    _msg = "\n".join([
+                        "SYSTEM REJECT: No file-write tool call detected.",
+                        "Disk still missing %d planned file(s)." % len(_miss_ft),
+                        "You MUST reply in EXACTLY this format:",
+                        "",
+                        "THOUGHT: writing next files",
+                        'ACTION: {"tool": "batch_edit", "args": {"edits": [{"path": "%s", "content": "<full file source>"}]}}' % _next,
+                        "",
+                        "Write these NOW (2-3 per batch): %s" % _batch,
+                        "All remaining: %s" % _rest,
+                        "FORBIDDEN: FINAL_ANSWER, plain English only, markdown without ACTION.",
+                        "Strike %d/8." % self._force_tool_strikes,
+                    ])
+
+                    if self.agent.conversation and self.agent.conversation[-1].get("role") == "assistant":
+                        self.agent.conversation.pop()
+                    self.agent.conversation.append({"role": "user", "content": _msg})
+
+                    if self._force_tool_strikes >= 8:
+                        _give_up = (
+                            "Stopped after 8 non-write responses. Still missing: %s. "
+                            "Type yes to retry, or simplify the plan." % _rest
+                        )
+                        if cb.on_final:
+                            try:
+                                await cb.on_final(_give_up)
+                            except Exception:
+                                pass
+                        self._force_tool_strikes = 0
+                        return _give_up
+                    continue
+                else:
+                    self._force_tool_strikes = 0
+            # ═══ END FORCE_TOOL_GATE_V1 ═══════════════════════════════════
+
+
+
+
+
+            # Final Answer verification
+            if isinstance(parsed, FinalAnswer):
+                # NUCLEAR ANTI-HALLUCINATION GATE
+                try:
+                    _ws = workspace_root()
+                    try_save_plan_from_llm_output(getattr(parsed, "content", "") or "", _ws)
+                    _plan = load_plan(_ws)
+                    _miss = missing_files(_ws) if _plan else []
+                    _have = existing_planned_files(_ws) if _plan else []
+                    _writes = getattr(self, "_session_write_count", 0)
+                    _content = getattr(parsed, "content", "") or ""
+                    _claims = claims_files_created(_content)
+                    _approved = is_plan_approved(_ws) if _plan else False
+
+                    if _claims and _writes < 1 and (_miss or not _have):
+                        _log_event(self.session_id, "hallucination_no_writes", {
+                            "writes": _writes, "missing": list(_miss)[:20],
+                        })
+                        _rej = (
+                            "SYSTEM REJECT — HALLUCINATION.\n"
+                            "You claimed files were created but no successful write_file/batch_edit ran.\n"
+                            "existing: " + (", ".join(_have[:15]) if _have else "(none)") + "\n"
+                            "missing: " + (", ".join(_miss) if _miss else "(none)") + "\n"
+                            "Call batch_edit or write_file NOW. FINAL_ANSWER is forbidden until disk has the files."
+                        )
+                        if self.agent.conversation and self.agent.conversation[-1].get("role") == "assistant":
+                            self.agent.conversation.pop()
+                        self.agent.conversation.append({"role": "user", "content": _rej})
+                        self._force_tool_strikes = 0
+                        continue
+
+                    if _approved and _miss:
+                        _log_event(self.session_id, "final_blocked_missing", {"missing": _miss})
                         self.agent.conversation.append({
                             "role": "user",
-                            "content": (
-                                "STOP - your answer claims files were created but I see "
-                                "NO write_file or batch_edit success in recent observations. "
-                                "Call list_dir(\".\") NOW to prove which files actually exist. "
-                                "Then report the TRUTH - do not claim success for files "
-                                "that were not written."
-                            )
+                            "content": rejection_message_for_missing(_miss, _have),
                         })
-                        continue  # force another iteration
+                        continue
 
+                    if _claims and _miss:
+                        self.agent.conversation.append({
+                            "role": "user",
+                            "content": rejection_message_for_missing(_miss, _have),
+                        })
+                        continue
+
+                    if _plan and not _miss and _have:
+                        clear_plan(_ws)
+                except Exception as _ng:
+                    try:
+                        _log_event(self.session_id, "nuclear_gate_err", {"err": str(_ng)})
+                    except Exception:
+                        pass
+                # ═══ HARD DISK GATE — no hallucinated complete ═══
+                try:
+                    _ws = workspace_root()
+                    try_save_plan_from_llm_output(getattr(parsed, "content", None) or llm_output or "", _ws)
+                    _miss = missing_files(_ws)
+                    _have = existing_planned_files(_ws)
+                    if _miss and not is_plan_approved(_ws):
+                        _miss = []
+                    if _miss:
+                        _log_event(self.session_id, "final_answer_blocked_missing", {"missing": _miss, "have": _have})
+                        self.agent.conversation.append({
+                            "role": "user",
+                            "content": rejection_message_for_missing(_miss, _have),
+                        })
+                        try:
+                            self.agent.refresh_prompt(user_message)
+                        except Exception:
+                            pass
+                        continue
+                    elif load_plan(_ws):
+                        clear_plan(_ws)
+                except Exception as _gate_err:
+                    try:
+                        _log_event(self.session_id, "final_gate_err", {"err": str(_gate_err)})
+                    except Exception:
+                        pass
                 _log_event(self.session_id, "final_answer", {"content": parsed.content})
                 if cb.on_final:
                     try:
@@ -366,11 +506,7 @@ class AgentRuntime:
                         pass
                 return parsed.content
 
-            # Reset parse fail counter on any successful parse
-            if hasattr(self, "_parse_fail_count"):
-                self._parse_fail_count = 0
-
-            # ─── Tool call
+            # Tool Calls execution
             if isinstance(parsed, ToolCall):
                 tool_name = parsed.tool
                 tool_args = parsed.args or {}
@@ -381,59 +517,123 @@ class AgentRuntime:
                     except Exception:
                         pass
 
-                # 'finish' tool: short-circuit to final
                 if tool_name == "finish":
-                    summary = tool_args.get("summary", "Task complete.")
-                    _log_event(self.session_id, "finish", {"summary": summary})
-                    if cb.on_final:
-                        try:
-                            await cb.on_final(summary)
-                        except Exception:
-                            pass
-                    return summary
+                    return tool_args.get("summary", "Complete.")
 
-                # Notify tool start, get a handle the UI can update later
                 handle = None
                 if cb.on_tool_start:
                     try:
                         handle = await cb.on_tool_start(tool_name, tool_args)
                     except Exception:
-                        handle = None
+                        pass
 
-                _log_event(self.session_id, "tool_start", {
-                    "step": step, "tool": tool_name, "args": tool_args,
-                })
-
-                # LOOP DETECTION: if same tool+args called 3 times in a row, force the agent to stop
-                call_signature = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)[:200]}"
-                recent_calls.append(call_signature)
-                if len(recent_calls) > 3:
+                # ── Loop detection (tool-name + soft args) ─────────────
+                # Exact-arg match (original)
+                sig = f"{tool_name}:{json.dumps(tool_args, sort_keys=True, default=str)[:200]}"
+                recent_calls.append(sig)
+                if len(recent_calls) > 5:
                     recent_calls.pop(0)
-                if len(recent_calls) == 3 and recent_calls[0] == recent_calls[1] == recent_calls[2]:
-                    loop_msg = (
-                        f"LOOP DETECTED: You called {tool_name} with identical arguments 3 times. "
-                        f"This is wasting time. STOP repeating. Either: (a) try a DIFFERENT tool/argument, "
-                        f"or (b) give FINAL_ANSWER with what you know so far. Do NOT call {tool_name} again."
-                    )
-                    self.agent.conversation.append({"role": "user", "content": loop_msg})
-                    _log_event(self.session_id, "loop_detected", {"tool": tool_name, "signature": call_signature})
+
+                _exact_loop = len(recent_calls) >= 3 and recent_calls[-1] == recent_calls[-2] == recent_calls[-3]
+                # Same tool 4x in a row even with different args (write_file spam etc.)
+                _tool_only = [c.split(":")[0] for c in recent_calls]
+                _same_tool_loop = len(_tool_only) >= 4 and len(set(_tool_only[-4:])) == 1
+
+                if _exact_loop or _same_tool_loop:
+                    _log_event(self.session_id, "loop_detected", {
+                        "tool": tool_name, "exact": _exact_loop, "same_tool": _same_tool_loop,
+                    })
+                    # Tell model what's missing instead of generic "stop"
+                    _miss = []
+                    try:
+                        _pf = ws_dir / ".oblivion" / "plan.json"
+                        if _pf.exists():
+                            _pd = json.loads(_pf.read_text(encoding="utf-8"))
+                            _miss = [s["path"] for s in _pd.get("steps", []) if not (ws_dir / s["path"]).exists()]
+                    except Exception:
+                        pass
+                    if _miss:
+                        _msg = (
+                            f"LOOP DETECTED on `{tool_name}`. You already did this. "
+                            f"Move on to the NEXT missing file: `{_miss[0]}`. "
+                            f"Remaining: {', '.join(_miss)}. "
+                            f"Call batch_edit/write_file for a file you have NOT written yet."
+                        )
+                    else:
+                        _msg = (
+                            f"LOOP DETECTED on `{tool_name}`. All planned files exist. "
+                            f"Give FINAL_ANSWER now. Do NOT call {tool_name} again."
+                        )
+                    self.agent.conversation.append({"role": "user", "content": _msg})
                     recent_calls.clear()
                     continue
 
-                # APPROVAL: use v3 permission tier system
+                # ── PRE-DISPATCH RESCUE HOOKS ──────────────────────
+                # Hook A: edit_file on non-existent file → auto-suggest write_file
+                if tool_name == "edit_file":
+                    _tgt = (tool_args or {}).get("path", "")
+                    if _tgt and not (ws_dir / _tgt).exists():
+                        _log_event(self.session_id, "edit_file_missing_rescue", {"path": _tgt})
+                        self.agent.conversation.append({
+                            "role": "user",
+                            "content": (
+                                f"OBSERVATION: `edit_file` FAILED — `{_tgt}` does not exist on disk.\n"
+                                f"You cannot EDIT a file that was never created.\n\n"
+                                f"CORRECTION: Call `write_file` with the FULL content of `{_tgt}` to CREATE it. "
+                                f"Do NOT retry edit_file on this path."
+                            ),
+                        })
+                        if cb.on_tool_done:
+                            try:
+                                await cb.on_tool_done(handle, f"Auto-blocked: {_tgt} does not exist. Use write_file to create.", 0)
+                            except Exception:
+                                pass
+                        continue
+
+                # Hook B: block writing the same file twice in one run
+                if tool_name in ("write_file", "batch_edit"):
+                    _targets = []
+                    if tool_name == "write_file":
+                        _p = (tool_args or {}).get("path", "")
+                        if _p:
+                            _targets.append(_p)
+                    else:
+                        for _e in (tool_args or {}).get("edits", []) or []:
+                            if isinstance(_e, dict) and _e.get("path"):
+                                _targets.append(_e["path"])
+
+                    _dupes = [p for p in _targets if _files_written_this_run.get(p, 0) >= 1]
+                    if _dupes:
+                        _log_event(self.session_id, "duplicate_write_blocked", {"paths": _dupes})
+                        # Find next missing file to redirect to
+                        _next_miss = []
+                        try:
+                            _pf = ws_dir / ".oblivion" / "plan.json"
+                            if _pf.exists():
+                                _pd = json.loads(_pf.read_text(encoding="utf-8"))
+                                _next_miss = [s["path"] for s in _pd.get("steps", [])
+                                              if not (ws_dir / s["path"]).exists()]
+                        except Exception:
+                            pass
+                        _msg = (
+                            f"BLOCKED: You already wrote `{', '.join(_dupes)}` in this run. "
+                            f"Do NOT rewrite the same file.\n"
+                        )
+                        if _next_miss:
+                            _msg += f"Missing files still pending: {', '.join(_next_miss[:5])}\nWrite `{_next_miss[0]}` next."
+                        else:
+                            _msg += "All planned files exist. Give FINAL_ANSWER now."
+                        self.agent.conversation.append({"role": "user", "content": _msg})
+                        if cb.on_tool_done:
+                            try:
+                                await cb.on_tool_done(handle, f"Blocked duplicate write: {_dupes}", 0)
+                            except Exception:
+                                pass
+                        continue
+
                 approved = True
-                result = None  # will be set if blocked before execution
-
-                _needs_approval, _reason = tier_needs_approval(
-                    tool_name, tool_args, self.session_state
-                )
-
-                _log_event(self.session_id, "permission_check", {
-                    "step": step,
-                    "tool": tool_name,
-                    "needs_approval": _needs_approval,
-                    "reason": _reason,
-                })
+                result = None
+                _needs_approval, _reason = tier_needs_approval(tool_name, tool_args, self.session_state)
 
                 if _needs_approval:
                     if cb.on_approve_tool:
@@ -442,37 +642,29 @@ class AgentRuntime:
                         except Exception:
                             approved = False
                         if not approved:
-                            result = f"User denied {tool_name}."
+                            result = f"Denied: {tool_name}"
                     else:
-                        # No approval callback = safe default: block mutate, 
-                        # always block destructive
                         if _reason == "destructive":
                             approved = False
-                            result = (
-                                f"BLOCKED: {tool_name} classified as destructive "
-                                f"and no approval handler is registered. "
-                                f"This is a safety block."
-                            )
-                        else:
-                            # mutate tier with no handler = auto-approve
-                            # (CLI mode has no TUI approval callback)
-                            approved = True
+                            result = "Blocked destructive action."
 
-                # Execute
                 t0 = time.perf_counter()
-                if not approved and result is None:
-                    result = f"User denied {tool_name}."
-                elif approved:
+                if approved and result is None:
                     try:
                         result = await asyncio.to_thread(dispatch, tool_name, tool_args)
                     except Exception as e:
                         result = f"Error running {tool_name}: {e}"
+                elif not approved and result is None:
+                    result = "User denied permission."
                 ms = int((time.perf_counter() - t0) * 1000)
 
-                _log_event(self.session_id, "tool_done", {
-                    "step": step, "tool": tool_name, "ms": ms,
-                    "result_preview": (result or "")[:200],
-                })
+                # Clamp very large observations safely!
+                if len(result) > 4000:
+                    result = (
+                        f"{result[:1500]}\n\n"
+                        f"... [TRUNCATED {len(result) - 3000} CHARS OF LARGE TOOL OBSERVATION TO PREVENT BLINDNESS] ...\n\n"
+                        f"{result[-1500:]}"
+                    )
 
                 if cb.on_tool_done:
                     try:
@@ -480,7 +672,68 @@ class AgentRuntime:
                     except Exception:
                         pass
 
-                # Feed observation back into conversation
+                # ── Progress stall detector + write ledger ─────────────
+                _wrote_something = False
+                _write_ok = result and "Error" not in str(result)[:100] and "not found" not in str(result).lower()
+
+                if tool_name in ("write_file", "batch_edit", "edit_file"):
+                    if _write_ok:
+                        _wrote_something = True
+                        _steps_without_write = 0
+                        # Extract paths and mark them as written
+                        _paths_written = []
+                        if tool_name == "write_file" and tool_args.get("path"):
+                            _paths_written.append(tool_args["path"])
+                        elif tool_name == "batch_edit":
+                            for _ed in (tool_args.get("edits") or []):
+                                if isinstance(_ed, dict) and _ed.get("path"):
+                                    _paths_written.append(_ed["path"])
+                        elif tool_name == "edit_file" and tool_args.get("path"):
+                            _paths_written.append(tool_args["path"])
+
+                        for _pw in _paths_written:
+                            _last_written_files.add(_pw)
+                            _files_written_this_run[_pw] = _files_written_this_run.get(_pw, 0) + 1
+                    else:
+                        _steps_without_write += 1
+                else:
+                    _steps_without_write += 1
+
+                if _steps_without_write >= 5:
+                    _miss = []
+                    try:
+                        _pf2 = ws_dir / ".oblivion" / "plan.json"
+                        if _pf2.exists():
+                            _pd2 = json.loads(_pf2.read_text(encoding="utf-8"))
+                            _miss = [s["path"] for s in _pd2.get("steps", []) if not (ws_dir / s["path"]).exists()]
+                    except Exception:
+                        pass
+                    if _miss:
+                        result = (
+                            (result or "") + f"\n\nSYSTEM: No files written in {_steps_without_write} steps. "
+                            f"STOP exploring. Write the next missing file NOW: `{_miss[0]}`. "
+                            f"Still missing: {', '.join(_miss)}"
+                        )
+                    _steps_without_write = 0
+
+                
+                # ledger successful writes
+                if tool_name in ("write_file", "batch_edit") and result and "error" not in str(result).lower()[:80]:
+                    if not hasattr(self, "_files_written_this_run"):
+                        self._files_written_this_run = {}
+                    if tool_name == "write_file" and tool_args.get("path"):
+                        self._files_written_this_run[tool_args["path"]] = self._files_written_this_run.get(tool_args["path"], 0) + 1
+                    elif tool_name == "batch_edit":
+                        for e in (tool_args.get("edits") or []):
+                            if isinstance(e, dict) and e.get("path"):
+                                self._files_written_this_run[e["path"]] = self._files_written_this_run.get(e["path"], 0) + 1
+
+                
+                if tool_name in ("write_file", "batch_edit", "edit_file"):
+                    _okw = result and "error" not in str(result).lower()[:100]
+                    if _okw and "not found" not in str(result).lower()[:120]:
+                        self._session_write_count = getattr(self, "_session_write_count", 0) + 1
+
                 self.agent.conversation.append({
                     "role": "user",
                     "content": (
@@ -488,94 +741,17 @@ class AgentRuntime:
                         "Continue: next THOUGHT + ACTION, or FINAL_ANSWER."
                     ),
                 })
-
-                # EXPLORATION LOOP GUARD: count read-only calls in a row
-                READ_ONLY_TOOLS = {
-                    "read_file", "list_dir", "grep_files", "file_exists",
-                    "search_code", "find_symbol", "list_symbols",
-                    "find_callers", "project_map", "recall",
-                }
-                if tool_name in READ_ONLY_TOOLS:
-                    consecutive_reads += 1
-                else:
-                    consecutive_reads = 0
-
-                if consecutive_reads >= 5:
-                    _log_event(self.session_id, "exploration_loop", {
-                        "step": step, "reads_count": consecutive_reads,
-                    })
-                    self.agent.conversation.append({
-                        "role": "user",
-                        "content": (
-                            "EXPLORATION LIMIT REACHED. You have made "
-                            + str(consecutive_reads)
-                            + " read/search calls in a row without writing any code. "
-                            "STOP exploring. You have enough context. Either:\n"
-                            "(a) Write the NEXT file with write_file, OR\n"
-                            "(b) Give FINAL_ANSWER with what you've learned so far.\n"
-                            "Do NOT call another read/search tool until you do one of the above."
-                        ),
-                    })
-                    consecutive_reads = 0
-
                 continue
 
-            # ─── Parser failure
-            _log_event(self.session_id, "parse_failure", {"raw": llm_output[:300]})
-
-            # CIRCUIT BREAKER: after 3 parse failures in a row, force stop
-            if not hasattr(self, "_parse_fail_count"):
-                self._parse_fail_count = 0
-            self._parse_fail_count += 1
-
-            if self._parse_fail_count >= 3:
-                _log_event(self.session_id, "parse_circuit_breaker", {
-                    "count": self._parse_fail_count,
-                })
-                stop_msg = (
-                    "I hit a parsing loop and stopped to save your tokens.\n\n"
-                    "This usually means the model is getting confused by a large context.\n"
-                    "Try:\n"
-                    "  1. /clear  to reset conversation\n"
-                    "  2. Rephrase your request more simply\n"
-                    "  3. /model  to try a different model"
-                )
-                if cb.on_final:
-                    try:
-                        await cb.on_final(stop_msg)
-                    except Exception:
-                        pass
-                self._parse_fail_count = 0  # reset for next run
-                return stop_msg
-
-            if cb.on_parse_failure:
-                try:
-                    await cb.on_parse_failure(llm_output)
-                except Exception:
-                    pass
+            # Parse failures
             self.agent.conversation.append({
                 "role": "user",
-                "content": (
-                    "Invalid format. Use THOUGHT: then ACTION: {json} or "
-                    "THOUGHT: then FINAL_ANSWER: text"
-                ),
+                "content": "Invalid response layout. Respond strictly with Form A (ACTION) or Form B (FINAL_ANSWER).",
             })
 
-        # Loop budget exhausted
-        msg = (
-            "Hit the " + str(self.max_iterations) + "-iteration budget without finishing.\n\n"
-            "Progress is preserved in the conversation. Type /continue to resume with a fresh budget, "
-            "or give a new instruction to refocus the work."
-        )
-        _log_event(self.session_id, "max_iterations", {"limit": self.max_iterations})
-        if cb.on_final:
-            try:
-                await cb.on_final(msg)
-            except Exception:
-                pass
-        return msg
+        return "Safety budget of execution iterations reached."
 
-    # ── Internal: bridge LLM streaming into async land ───────────────────────
+
     async def _stream_llm(self, messages: list, cb: RuntimeCallbacks) -> Optional[str]:
         loop = asyncio.get_event_loop()
         token_queue: asyncio.Queue = asyncio.Queue()
@@ -617,3 +793,25 @@ class AgentRuntime:
                 except Exception:
                     pass
             return None
+
+
+def plan_task(goal: str, max_files: int = 10) -> str:
+    """Break a multi-file task into atomic file-level steps."""
+    return f"""PLANNER ACTIVATED — decompose this goal into atomic file-level steps:
+
+GOAL: {goal}
+
+Respond with a numbered plan in EXACTLY this format:
+
+PLAN:
+1. <filename> — <one-line description of what this file does>
+2. <filename> — <description>
+3. ...
+
+RULES:
+- Each step = exactly ONE file (no batching)
+- Order matters: dependencies first (e.g. package.json before src/main.jsx)
+- Max {max_files} files in plan
+- After listing the plan, ask user: "Approve this plan? Reply yes/no or suggest changes"
+- Do NOT write any code yet. ONLY the plan.
+"""

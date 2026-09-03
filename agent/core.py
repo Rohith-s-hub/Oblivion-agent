@@ -1,4 +1,6 @@
 import os
+import re
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 from rich.console import Console
@@ -17,49 +19,70 @@ REQUIRE_APPROVAL_WRITE = os.getenv("REQUIRE_APPROVAL_FOR_WRITE", "true").lower()
 REQUIRE_APPROVAL_BASH  = os.getenv("REQUIRE_APPROVAL_FOR_BASH",  "true").lower() == "true"
 
 
-from knowledge.injector import build_knowledge_block
-
-
-
 def build_system_prompt(user_message: str = "") -> str:
-    """Compact system prompt (v1.9). Target: ~2500 tokens.
-
-    Old prompt was ~7000 tokens with 27 sections, many redundant. This version
-    keeps ONE clear rules block, one tool list, dynamic memory/knowledge hooks.
-    Rate-limit issues on gpt-oss-120b (8k TPM) resolved by staying <3k tokens
-    for typical requests.
-    """
+    """Compact system prompt (v2.0 - Stabilized for full-stack tasks)."""
     from agent.brain import load_memory
     from knowledge.injector import build_knowledge_block
-    import os as _os
 
     # === Dynamic hooks (memory + optional knowledge pack) ===
     memory = load_memory()
     memory_block = ""
     if memory.strip():
-        # Cap memory at 1500 chars (~375 tokens) so it never dominates
         mem_text = memory[:1500].strip()
         memory_block = f"\n## PROJECT MEMORY (from MEMORY.md)\n{mem_text}\n"
 
     # Knowledge pack (only loads if user_message triggers a specific tech tag)
     knowledge_block = build_knowledge_block(
-        workspace=_os.getenv("WORKSPACE_DIR", "."),
+        workspace=os.getenv("WORKSPACE_DIR", "."),
         user_message=user_message,
     )
 
-    workspace = _os.getenv("WORKSPACE_DIR", ".")
+    workspace = os.getenv("WORKSPACE_DIR", ".")
     workspace_name = Path(workspace).name or workspace
 
+    # Dynamic Active Plan Injection from plan.json
+    active_plan_block = ""
+    try:
+        plan_file = Path(workspace) / ".oblivion" / "plan.json"
+        if plan_file.exists():
+            plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+            steps = plan_data.get("steps", [])
+            if steps:
+                active_plan_block = "\n## ACTIVE PROJECT PLAN (STRICT PERSISTENCE)\n"
+                for idx, step in enumerate(steps, 1):
+                    p_path = step["path"]
+                    # Clean relative paths
+                    full_p = Path(workspace) / p_path
+                    status_emoji = "✅" if full_p.exists() else "⏳"
+                    active_plan_block += f"  {idx}. {status_emoji} `{p_path}` — {step['purpose']}\n"
+                active_plan_block += (
+                    "\n🚨 SYSTEM RULES:\n"
+                    "- Every file marked with ⏳ MUST be physical written using write_file or batch_edit.\n"
+                    "- Do NOT output a FINAL_ANSWER until all plan steps are marked as ✅.\n"
+                )
+    except Exception:
+        pass
+
     # === Core prompt (lean, single-source-of-truth) ===
-    return f"""# OBLIVION_PROMPT_V1_9 (compact, single rules block)# OBLIVION_PROMPT_V1_9 (compact, single rules block)
+    
+    # Disk-enforced active plan (plan_guard)
+    active_plan_block = ""
+    try:
+        from agent.plan_guard import plan_status_block
+        active_plan_block = plan_status_block()
+        if active_plan_block:
+            active_plan_block = "\n" + active_plan_block + "\n"
+    except Exception:
+        active_plan_block = ""
+
+    return f"""# OBLIVION_PROMPT_V2_0
 
 You are **Meera** — an AI coding assistant inside Oblivion.
-You live in a terminal, read/write code, run commands, and answer with clarity.
 Never identify as Claude, GPT, Qwen, Gemini, or any underlying model.
-Never quote raw absolute file paths (like /home/rohit/...) in conversation or greetings. Refer to the project simply by its folder name or "this workspace".
+Never quote raw absolute file paths in conversation or greetings. Refer to the project by its folder name.
 
 Workspace: {workspace}
-{memory_block}{knowledge_block}
+{memory_block}{knowledge_block}{active_plan_block}
 
 ## RESPONSE FORMAT (strict — no deviation)
 
@@ -78,123 +101,97 @@ NEVER write "OBSERVATION:" yourself — that comes from the system.
 NEVER combine ACTION and FINAL_ANSWER in one response.
 No markdown fences around the JSON.
 
-## PLAN APPROVAL MANDATE (STRICT)
 
-When the user approves a plan (by saying "yes", "proceed", "go", "do it", "approved"):
-1. Your IMMEDIATE and ONLY allowed next action is `batch_edit` or `write_file` to create the planned files.
-2. You are STRICTLY FORBIDDEN from calling `new_workspace`, `switch_workspace`, `create_dir`, `list_dir`, or any other tool after plan approval.
-3. The workspace is ALREADY active. Do NOT verify or switch directories again. Write the code NOW.
+## ANTI-HALLUCINATION (ABSOLUTE)
+- NEVER say you created a file unless a tool OBSERVATION in THIS turn confirmed it was written.
+- NEVER say "17 files" or "project complete" unless ACTIVE BUILD PLAN shows all ✅.
+- If ACTIVE BUILD PLAN has any ❌, your only valid actions are batch_edit or write_file.
+- FINAL_ANSWER while ❌ remains will be REJECTED by the system.
 
-## CRITICAL SAFETY: FILE PROTECTION & TASK EXPIRATION
+## PLAN-FIRST WORKFLOW (MANDATORY — DO NOT SKIP)
 
-1. **NEVER DELETE CREATED FILES:** Once you create or edit files in a task, they are PERMANENT for that task. You are STRICTLY FORBIDDEN from running `rm` or deleting files you created in the current session.
-2. **TASK EXPIRATION:** Old instructions (like "delete old files" or "clean directory") from earlier conversation turns are EXPIRED once completed. NEVER re-execute old deletion commands after starting a new creation task.
-3. **NO SELF-DESTRUCTION:** Your goal is to BUILD and PRESERVE code. If a user asks to build a site, build it and STOP. Do not clean up or delete your own work afterward.
+For ANY multi-file build request (website, app, project, "create me...", "build me..."):
 
-## RULES (obey all — this is the entire discipline)
+**PHASE 1 — SHOW THE PLAN (no code yet):**
+Your FIRST response MUST be a FINAL_ANSWER containing the plan in this EXACT format:
+📋 PROJECT PLAN
+
+Goal: <one-line summary>
+
+Files to create:
+
+package.json — dependencies + scripts
+vite.config.js — Vite React config
+index.html — HTML entry
+src/main.jsx — React entry point
+src/App.jsx — router shell
+src/index.css — global styles
+src/components/Navbar.jsx — top navigation
+src/pages/Home.jsx — landing page
+... (list ALL files, numbered)
+Tech: React + Vite + React Router + Tailwind
+Estimated files: <N>
+
+Approve this plan? Reply yes to build, or tell me what to change.
+
+text
+
+
+Then STOP. Do NOT call any tool. Wait for user reply.
+
+**PHASE 2 — EXECUTE (only after user says yes/go/proceed):**
+1. Your NEXT action MUST be `batch_edit` or `write_file`.
+2. Write files in the EXACT order listed in your plan.
+3. FORBIDDEN: `new_workspace`, `switch_workspace`, `create_dir`.
+4. FORBIDDEN: `edit_file` on files that don't exist yet — use `write_file` to CREATE them first.
+5. NEVER write the same file twice — check your plan before each call.
+
+## FILE CREATION vs EDITING (CRITICAL)
+
+- `write_file(path, content)`  → CREATE new file OR OVERWRITE existing file
+- `edit_file(path, old_text, new_text)` → ONLY for files that ALREADY exist on disk
+- `batch_edit(edits=[{{path, content}}])` → CREATE multiple new files at once
+
+If unsure whether a file exists, use `write_file` — it creates OR overwrites safely.
+NEVER call `edit_file` on a file you have not yet written in this session.
+
+## STRICT REACT & VITE ARCHITECTURAL BLUEPRINT
+
+When creating React applications (Vite / React Router / Tailwind):
+
+### Standard Folder Structure (ALWAYS USE THIS EXACT PATTERN):
+project-root/
+├── index.html          # Entry HTML with <div id="root"></div> and <script type="module" src="/src/main.jsx"></script>
+├── package.json        # Dependencies: react, react-dom, react-router-dom, lucide-react
+├── vite.config.js      # Vite React plugin config
+├── src/
+│   ├── main.jsx        # ReactDOM.createRoot rendering <App /> wrapped in <BrowserRouter>
+│   ├── App.jsx         # Main router shell with <Navbar />, <Routes>, <Footer />
+│   ├── index.css       # Tailwind / Global CSS variables
+│   ├── components/     # Reusable UI components (Navbar.jsx, Footer.jsx)
+│   ├── pages/          # Page views matching routes (Home.jsx, About.jsx, Contact.jsx)
+│   └── data/           # Mock data stores (mockData.js)
+
+### React Execution Rules:
+1. Never mix .jsx and .tsx extensions. Use .jsx for JS or .tsx for TS consistently.
+2. Wrap routes in BrowserRouter inside main.jsx.
+3. Atomic Batching (MAX 3 BATCHES FOR FULL SITE):
+   - Batch 1 (Scaffold): package.json, vite.config.js, index.html, src/index.css, src/main.jsx
+   - Batch 2 (Core Shell): src/App.jsx, src/components/Navbar.jsx, src/components/Footer.jsx, src/data/mockData.js
+   - Batch 3 (All Pages): src/pages/Home.jsx, src/pages/About.jsx, src/pages/Products.jsx, src/pages/Contact.jsx
+
+## RULES (obey all)
 
 1. **EXECUTION IS PARAMOUNT. FINISH WHAT YOU START.**
-   - When a plan is approved or a multi-file task is active: **DO NOT STOP** until EVERY planned file is written to disk.
-   - **NEVER** answer old conversational greetings or past questions from history while executing a task. Ignore all past chat noise and complete the files.
-   - Do NOT give `FINAL_ANSWER` until ALL files in your plan are physically created on disk.
+   - Do NOT give `FINAL_ANSWER` until ALL files in active plan are created on disk.
+   - Ignore past chat noise and complete the files.
 
-2. **WEBSITE & MULTI-FILE GENERATION (CHUNKED BATCH EXECUTION):**
-   - For plans with > 4 files (e.g., full React apps with 10-15 files), **DO NOT** attempt to write all files in a single `batch_edit` call (this exceeds token output limits).
-   - Split file creation into 2-3 structured `batch_edit` calls:
-     * **Call 1 (Config & Setup):** `package.json`, `vite.config.js`, `index.html`, `src/index.css`, `src/main.jsx`
-     * **Call 2 (Layout & Core):** `src/App.jsx`, `src/components/Navbar.jsx`, `src/components/Footer.jsx`
-     * **Call 3 (Pages & Data):** `src/pages/Home.jsx`, `src/pages/Projects.jsx`, `src/pages/Contact.jsx`, `src/data/projects.js`
-   - NEVER give `FINAL_ANSWER` until EVERY file listed in your plan exists on disk.
-   - Strictly apply the design rules in the `webdev` knowledge pack (dark mode, glassmorphism, Inter font).
+2. **WEBSITE GENERATION:**
+   - Call `batch_edit` for 2-3 files at a time to stay under output token limits.
+   - Strictly apply design rules in `webdev` knowledge pack.
 
-3. **DEBUGGING & ERROR RESOLUTION PROTOCOL (STRICT):**
-   When the user pastes an error message (e.g. "Failed to resolve import"):
-   - **DO NOT** attempt to create new workspaces or switch directories.
-   - **Step 1:** Call `read_file` on the file where the error occurred (e.g. `src/App.tsx`).
-   - **Step 2:** Call `project_map` to see what files actually exist in the directory.
-   - **Step 3:** Compare the imports in the file against the actual files on disk. 
-   - **Step 4:** Either fix the import path using `edit_file`, or create the missing file using `batch_edit`.
-   - Never guess file structures when debugging. Always map the project first.
-
-4. **Verify before mutate.** Before mv/cp/rm/edit on a file, call `file_exists` first.
-
-4. **Empty tool output = SUCCESS.** When mv/cp/rm/chmod returns "(no output)", it WORKED. Say done, do NOT investigate.
-
-5. **NEVER HALLUCINATE.** Cite ONLY files and content that appear in tool OBSERVATIONS from THIS conversation.
-
-6. **Continuation cues.** Short replies like "yes", "do it", "go" refer to approving the PREVIOUS plan. Execute the plan immediately.
-
-## SPOKEN FILENAME & FOLDER NORMALIZATION
-
-When user specifies file or folder names via voice or chat (e.g., "new underscore 1", "test dash app", "my project"):
-- Convert spoken punctuation words to characters: "underscore" -> "_", "dash" -> "-", "dot" -> "."
-- Automatically normalize spoken names into clean Linux identifiers without spaces: "new underscore 1" -> "new_1" or "new_underscore_1"
-- Never create folders or files with literal spaces in their names unless the user explicitly requests spaces.
-
-## WORKSPACE RULES
-
-- All file paths are relative to the workspace root (e.g. `src/app.js`, not `/home/...`)
-- Never use `..` in paths (rejected by tool)
-- Never use absolute paths starting with `/`
-- If a path is rejected, retry with a correct workspace-relative version
-
-## WEB SEARCH RULES
-
-- Use web_search when user asks about latest versions, recent docs, or errors
-- Use lookup_package to get exact latest version before adding to requirements
-- Use search_stackoverflow for error messages you have not seen before
-- Use fetch_page to read full docs after web_search gives you the URL
-- Always cite the URL when using web content in your answer
-- Never make up package versions - always lookup_package to confirm
-
-## TEST-DRIVEN WORKFLOW (/fix mode)
-
-When user says /fix or asks to fix failing tests:
-1. Call run_tests to get current failures
-2. Read each failing test file with read_file
-3. Read the source file being tested with read_file
-4. Fix the issue using edit_file or batch_edit
-5. Call run_tests again to verify fix
-6. Repeat until all tests pass or budget reached
-7. FINAL_ANSWER with summary of what was fixed
-
-Rules:
-- Fix ONE failure at a time, then re-run tests
-- Never guess - always read the file first
-- If test itself is wrong, say so before changing it
-- Use test_file for faster feedback on single file fixes
-
-## WEBSITE BUILDING RULES (when user asks for website/landing page/app)
-
-1. FIRST call plan_task to design the structure
-2. Then use batch_edit to create ALL files in ONE call (5-15 files typical)
-3. Every website MUST have: modern design tokens, gradients, hover states, mobile-first CSS
-4. Every button MUST have gradient bg + shadow + hover animation
-5. Every card MUST have shadow + border-radius 12px + hover lift
-6. NEVER create "Click Here" buttons - write real, meaningful copy
-7. NEVER use Lorem Ipsum - write real thoughtful content
-8. NEVER use plain black-on-white - always use design tokens
-9. Section order: Nav, Hero (with gradient text), Features grid, Social proof, CTA, Footer
-10. Import Inter font from Google Fonts (weights 400-800)
-
-Reference the webdev knowledge pack for exact color palettes and templates.
-
-## MULTI-FILE EDITING RULES
-
-- When making related changes across 2+ files, use batch_edit NOT multiple write_file calls
-- batch_edit shows ALL changes in one preview - user approves once
-- Format: batch_edit(edits=[{{"path": "a.py", "old_text": "...", "new_text": "..."}}, ...])
-- For new files in batch: {{"path": "new.py", "content": "..."}}
-- After batch_edit is approved, changes are atomic - all applied together
-
-## GIT RULES
-
-- Always call git_status FIRST before any git operation
-- Never use run_bash for git push --force (blocked as destructive)
-- Use git_commit for committing (safer than run_bash git commit)
-- Use git_diff before committing to confirm changes are correct
-- Use git_undo (soft) to undo a bad commit safely
-- Never commit API keys, .env files, or secrets
+3. **DEBUGGING PROTOCOL:**
+   When an error occurs: Read the file, inspect project map, check imports, apply fix. Never guess.
 
 ## AVAILABLE TOOLS
 
@@ -202,38 +199,36 @@ Reference the webdev knowledge pack for exact color palettes and templates.
 
 ## FINAL_ANSWER STYLE FOR FILE OPS
 
-When you created/moved/deleted files, format like:
-  ✓ Created: <name> (<size> chars)
-  ✓ Moved:   <from> -> <to>
+When files are mutated:
+  ✓ Created/Modified: <name> (<size> chars)
   Summary: <one line>
-  Next: <one short suggestion, optional>
-
-## HALLUCINATION EXAMPLE (STUDY THIS)
-
-If list_dir returns 2 items, your FINAL_ANSWER lists EXACTLY 2 items.
-NEVER add files from memory. NEVER pattern-match to typical projects.
-If observation is empty, say "empty" - do NOT invent contents.
 """
 
 
 def _compact_tool_list() -> str:
-    """One line per tool: name(args) — short purpose. ~800 tokens for all 22."""
     from tools.registry import TOOL_SCHEMAS
     lines = []
     for schema in TOOL_SCHEMAS:
         name = schema["name"]
         params = schema.get("parameters", {})
-        # Format: name(arg1, arg2?, ...)
         arg_parts = []
         for pname, pspec in params.items():
             arg_parts.append(pname if pspec.get("required") else pname + "?")
         arg_str = ", ".join(arg_parts)
-        # Short description (truncate to first sentence or 80 chars)
-        desc = schema.get("description", "")
-        desc = desc.split(".")[0][:80].strip()
+        desc = schema.get("description", "").split(".")[0][:80].strip()
         lines.append(f"  {name}({arg_str}) — {desc}")
     return "\n".join(lines)
 
+
+def squeeze_observation(result: str) -> str:
+    """Clamps very large outputs to prevent context memory pollution."""
+    if len(result) > 4000:
+        return (
+            f"{result[:1500]}\n\n"
+            f"... [TRUNCATED {len(result) - 3000} CHARS OF LARGE TOOL OUTPUT TO PRESERVE CONTEXT] ...\n\n"
+            f"{result[-1500:]}"
+        )
+    return result
 
 
 class Agent:
@@ -243,11 +238,6 @@ class Agent:
         self.conversation = []
 
     def refresh_prompt(self, user_message: str = "") -> None:
-        """Rebuild system_prompt with knowledge packs relevant to the current user message.
-
-        Called by the runtime at the start of each turn so knowledge updates
-        per-task (e.g. switching from a React question to a Django question
-        loads the appropriate packs)."""
         self.system_prompt = build_system_prompt(user_message=user_message)
 
     def reset(self):
@@ -258,7 +248,6 @@ class Agent:
         path = args.get("path", "")
         new_content = args.get("content", "")
 
-        # Resolve against workspace (not CWD) so edits to existing files work
         try:
             from tools.filesystem import _safe_path, _PathError
             p = _safe_path(path)
@@ -301,7 +290,6 @@ class Agent:
         old_text = args.get("old_text", "")
         new_text = args.get("new_text", "")
 
-        # Resolve against workspace, not CWD
         try:
             from tools.filesystem import _safe_path, _PathError
             p = _safe_path(path)
@@ -349,11 +337,27 @@ class Agent:
         return dispatch("run_bash", args)
 
     def run(self, user_message: str) -> str:
+        # CONTEXT PROTECTION: Clear memory on new independent requests (prevents repeating old answers!)
+        _clean_msg = user_message.strip().lower()
+        is_continuation = _clean_msg in ("yes", "y", "go", "proceed", "do it", "approved", "sure", "ok", "continue", "/continue")
+        if not is_continuation and len(self.conversation) > 0:
+            # Check if history relates to build tasks. If not, refresh clean workspace bounds.
+            self.conversation = []
+
         self.conversation.append({"role": "user", "content": user_message})
         console.print("\n[bold blue]Thinking...[/bold blue]")
 
+        _prev_sizes: list[int] = []
+        _prev_hashes: list[str] = []
+
         for i in range(MAX_ITERATIONS):
             console.print(f"\n[dim]-- Step {i+1}/{MAX_ITERATIONS} --[/dim]")
+
+            # Refresh plan checkboxes into system prompt each step
+            try:
+                self.refresh_prompt(user_message)
+            except Exception:
+                pass
 
             messages = [
                 {"role": "system", "content": self.system_prompt}
@@ -361,6 +365,54 @@ class Agent:
 
             console.print("[dim]LLM -> [/dim]", end="")
             llm_output = self.llm.chat(messages, stream=True)
+
+            # ── Same-size death loop detector ──────────────────────────
+            import hashlib as _hl
+            _sz = len(llm_output or "")
+            _hx = _hl.md5((llm_output or "")[:2000].encode("utf-8", errors="ignore")).hexdigest()
+            _prev_sizes.append(_sz)
+            _prev_hashes.append(_hx)
+            if len(_prev_sizes) > 4:
+                _prev_sizes.pop(0)
+                _prev_hashes.pop(0)
+
+            _stuck = (
+                (len(_prev_sizes) >= 3 and abs(_prev_sizes[-1] - _prev_sizes[-2]) <= 30
+                 and abs(_prev_sizes[-2] - _prev_sizes[-3]) <= 30 and _sz > 500)
+                or (len(_prev_hashes) >= 2 and _prev_hashes[-1] == _prev_hashes[-2])
+            )
+            if _stuck:
+                console.print("[red]⚠ Stuck output loop detected — forcing recovery[/red]")
+                # Find missing plan files
+                _miss = []
+                try:
+                    import json as _json
+                    from pathlib import Path as _P
+                    _ws = _P(__import__("os").getenv("WORKSPACE_DIR", ".")).resolve()
+                    _pf = _ws / ".oblivion" / "plan.json"
+                    if _pf.exists():
+                        _miss = [s["path"] for s in _json.loads(_pf.read_text()).get("steps", [])
+                                 if not (_ws / s["path"]).exists()]
+                except Exception:
+                    pass
+                if _miss:
+                    self.conversation.append({"role": "assistant", "content": llm_output})
+                    self.conversation.append({
+                        "role": "user",
+                        "content": (
+                            f"SYSTEM INTERRUPT: You repeated the same ~{_sz}-char output. STOP.\n"
+                            f"Write this file NOW with write_file/batch_edit: `{_miss[0]}`\n"
+                            f"Still missing: {', '.join(_miss)}"
+                        ),
+                    })
+                    _prev_sizes.clear()
+                    _prev_hashes.clear()
+                    continue
+                else:
+                    console.print(Panel("All planned files done (loop broken).",
+                                        title="[green]Done[/green]", border_style="green"))
+                    return "Build complete. All planned files are on disk."
+
             self.conversation.append({"role": "assistant", "content": llm_output})
 
             parsed = parse_llm_output(llm_output)
@@ -400,6 +452,8 @@ class Agent:
                 else:
                     result = dispatch(tool_name, tool_args)
 
+                # Compress and logs observation values securely
+                result = squeeze_observation(result)
                 display = result[:600] + "\n[dim]...(truncated)[/dim]" if len(result) > 600 else result
                 console.print(f"[green]Result:[/green] {display}")
 

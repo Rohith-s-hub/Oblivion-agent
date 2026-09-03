@@ -104,7 +104,6 @@ SLASH_COMMANDS = [
 # Auto-append every model from the registry so the dropdown always shows ALL options.
 # Add this AFTER initial SLASH_COMMANDS list above.
 try:
-    from agent.models import MODELS as _REG
     _model_entries = []
     for _name, _info in _REG.items():
         _desc = _info.get("description", "")[:50]
@@ -173,7 +172,6 @@ SLASH_COMMANDS = SLASH_COMMANDS[:0] + [
 # ── Auto-extend SLASH_COMMANDS with every model from the registry ──
 # This way new models added to agent/models.py automatically appear in autocomplete
 try:
-    from agent.models import MODELS as _MODEL_REGISTRY
     for _mname, _minfo in _MODEL_REGISTRY.items():
         _cost = _minfo.get("cost", "")
         _provider = _minfo.get("provider", "")
@@ -384,225 +382,194 @@ class ActivityItem(Static):
 
 # ── Main App ──────────────────────────────────────────────────────────────────
 class OblivionApp(App):
+    theme = "ansi-dark"
     CSS = """
+    
+    Tree {
+        background: #09090b;
+        color: #f8fafc;
+    }
+    Tree:focus {
+        background: #09090b;
+    }
+    Tree > .tree--cursor {
+        background: #181820;
+        color: #22d3ee;
+        text-style: bold;
+    }
+    Tree > .tree--guides {
+        color: #27272a;
+    }
+
     Screen {
-        background: #0d0f14;
+        background: #09090b;
+        color: #f8fafc;
     }
     
     Header {
-        background: #13162a;
-        color: #7b8cde;
+        background: #09090b;
+        color: #a78bfa;
+        dock: top;
+        height: 1;
     }
     
     Footer {
-        background: #13162a;
-        color: #febc2e;
+        background: #121218;
+        color: #71717a;
+        dock: bottom;
+        height: 1;
     }
 
-    #main-container { height: 100%; }
+    #main-container { 
+        height: 100%; 
+        background: #09090b;
+    }
 
     #chat-panel {
         width: 65%;
-        border: round #febc2e;
+        border: round #27272a;
         padding: 0 1;
-        background: #0d0f14;
+        background: #09090b;
+    }
+    #chat-panel:focus-within {
+        border: round #8b5cf6;
     }
 
     #side-panel { width: 35%; }
 
     #activity-panel {
-        height: 60%;
-        border: round #7b8cde;
+        height: 55%;
+        border: round #27272a;
         padding: 0 1;
-        background: #0b0d13;
+        background: #09090b;
+    }
+    #activity-panel:focus-within {
+        border: round #22d3ee;
     }
 
-    #workspace-panel {
-        height: 40%;
-        border: round #3e4560;
+    #files-panel {
+        height: 45%;
+        border: round #27272a;
         padding: 0 1;
-        background: #0b0d13;
+        background: #09090b;
+    }
+    #files-panel:focus-within {
+        border: round #8b5cf6;
     }
 
     #input-box {
         dock: bottom;
-        height: 3;
-        border: round #9aa0b8;
-        margin: 0 1;
-        background: #0d0f14;
-        color: #7b8cde;
+        border: round #27272a;
+        background: #121218;
+        color: #f8fafc;
+        margin-top: 0;
     }
-
-    Input:focus {
-        border: round #7b8cde;
-    }
-
-    #status-bar {
-        height: 1;
-        background: #13162a;
-        color: #7b8cde;
-        padding: 0 1;
-    }
-
-    ApprovalModal {
-        align: center middle;
-        background: rgba(10, 12, 17, 0.85);
-    }
-
-    #modal-container {
-        width: 75;
-        max-width: 100;
-        height: auto;
-        max-height: 85%;
-        background: #0d0f14;
-        border: tall #1e2130;
-        padding: 1 2;
-    }
-
-    #modal-header {
-        text-align: center;
-        width: 100%;
-        margin-bottom: 1;
-        color: #7b8cde;
-    }
-
-    #modal-info {
-        margin-bottom: 1;
-        padding: 1 2;
-        background: #13162a;
-        border: tall #2a2d46;
-        height: auto;
-        color: #c8cdd8;
-    }
-
-    #modal-diff-label {
-        text-align: center;
-        width: 100%;
-        color: #7b8cde;
-    }
-
-    #modal-diff {
-        margin-bottom: 1;
-        padding: 1;
-        background: #0b0d13;
-        border-left: tall #7b8cde44;
-        max-height: 18;
-        overflow-y: auto;
-        color: #9aa0b8;
-    }
-
-    #modal-hints {
-        text-align: center;
-        width: 100%;
-        margin-top: 1;
-        margin-bottom: 1;
-        padding: 1 0;
-        color: #3e4560;
-    }
-
-    #modal-buttons {
-        height: 3;
-        align: center middle;
-    }
-
-    #modal-buttons Button {
-        margin: 0 2;
-        min-width: 18;
-    }
-
-    #btn-approve {
-        background: #13162a;
-        border: tall #1db954;
-        color: #1db954;
-    }
-
-    #btn-approve:hover {
-        background: #1a2a1a;
-    }
-
-    #btn-deny {
-        background: #13162a;
-        border: tall #ff5f57;
-        color: #ff5f57;
-    }
-
-    #btn-deny:hover {
-        background: #2a1a1a;
-    }
-    SessionPicker {
-        align: center middle;
-        background: rgba(10, 12, 17, 0.85);
-    }
-
-    #session-picker-container {
-        width: 90;
-        max-width: 120;
-        height: 80%;
-        background: #0d0f14;
-        border: tall #7b8cde;
-        padding: 1 2;
-    }
-
-    #session-picker-header {
-        text-align: center;
-        width: 100%;
-        margin-bottom: 1;
-    }
-
-    #session-picker-list {
-        height: 1fr;
-        background: #0b0d13;
-        border: tall #2a2d46;
-    }
-
-    #session-picker-list > .option-list--option-highlighted {
-        background: #febc2e;
-        color: #0d0f14;
-    }
-
-    #session-picker-list > .option-list--option {
-        color: #c8cdd8;
-        padding: 0 1;
-    }
-
-    #session-picker-hint {
-        text-align: center;
-        width: 100%;
-        margin-top: 1;
-        color: #3e4560;
-    }
-
-
-    ActivityItem { margin-bottom: 1; color: #ffffff; }
-
-    Label { color: #7b8cde; }
-    
-    Tree { background: #0b0d13; color: #9aa0b8; }
-    Tree:focus { background: #0b0d13; }
-
-    #slash-suggestions {
-        dock: bottom;
-        offset: 1 -5;
-        height: auto;
-        max-height: 14;
-        width: 65;
-        margin: 0;
-        background: #0b0d13;
-        border: round #7b8cde;
-        display: none;
-    }
-
-    #slash-suggestions.visible {
-        display: block;
-    }
-
-    #slash-suggestions > .option-list--option-highlighted {
-        background: #febc2e;
+    #input-box:focus {
+        border: round #8b5cf6;
         color: #ffffff;
     }
 
-    #slash-suggestions > .option-list--option {
-        color: #9aa0b8;
+    #status-bar {
+        dock: bottom;
+        height: 1;
+        background: #09090b;
+        color: #f8fafc;
+    }
+
+    #slash-suggestions {
+        layer: overlay;
+        dock: bottom;
+        margin-bottom: 3;
+        margin-left: 2;
+        width: 60;
+        max-height: 10;
+        background: #121218;
+        border: round #8b5cf6;
+        display: none;
+    }
+    #slash-suggestions.visible {
+        display: block;
+    }
+    #slash-suggestions > .option-list--option-highlighted {
+        background: #8b5cf6;
+        color: #ffffff;
+        text-style: bold;
+    }
+
+    /* Modals & Dialogs */
+    ApprovalModal {
+        align: center middle;
+        background: rgba(9, 9, 11, 0.85); /* Dark dimming overlay */
+    }
+    #modal-container {
+        width: 76;
+        height: auto;
+        background: #121218;
+        border: round #8b5cf6;
+        padding: 2 4;
+        margin: 0;
+        align: center middle;
+    }
+    #modal-header {
+        text-align: center;
+        text-style: bold;
+        color: #67e8f9;
+        margin-bottom: 1;
+        width: 100%;
+    }
+    #modal-info {
+        width: 100%;
+        margin-bottom: 1;
+        background: #09090b;
+        padding: 1 2;
+        border: round #27272a;
+    }
+    #modal-diff-label {
+        color: #a78bfa;
+        text-style: bold;
+        margin-top: 1;
+        width: 100%;
+    }
+    #modal-diff {
+        width: 100%;
+        max-height: 12;
+        background: #09090b;
+        padding: 1 2;
+        border: round #27272a;
+        overflow-y: scroll;
+        margin-bottom: 1;
+    }
+    #modal-hints {
+        text-align: center;
+        color: #71717a;
+        margin-bottom: 1;
+        width: 100%;
+    }
+    #modal-buttons {
+        align: center middle;
+        height: 3;
+        width: 100%;
+    }
+    #btn-approve {
+        background: #10b981;
+        color: #09090b;
+        text-style: bold;
+        border: none;
+        margin-right: 4;
+        min-width: 16;
+    }
+    #btn-approve:hover {
+        background: #34d399;
+    }
+    #btn-deny {
+        background: #ef4444;
+        color: #ffffff;
+        text-style: bold;
+        border: none;
+        min-width: 16;
+    }
+    #btn-deny:hover {
+        background: #f87171;
     }
     """
 
@@ -650,7 +617,7 @@ class OblivionApp(App):
 
         with Horizontal(id="main-container"):
             with Vertical(id="chat-panel"):
-                yield Label("[bold #febc2e]◢ CHAT ◣[/bold #febc2e]")
+                yield Label("[bold #a78bfa]◆ CHAT[/bold #a78bfa]")
                 yield RichLog(id="chat-log", wrap=True, highlight=True, markup=True)
 
             with Vertical(id="side-panel"):
@@ -659,10 +626,10 @@ class OblivionApp(App):
                     yield VerticalScroll(id="activity-scroll")
 
                 with Vertical(id="workspace-panel"):
-                    yield Label("[bold #3e4560]◢ FILES ◣[/bold #3e4560]")
+                    yield Label("[bold #a78bfa]📁 FILES[/bold #a78bfa]")
                     yield Tree("◆ root/", id="workspace-tree")
 
-        yield Input(placeholder="◢ Enter command, /help, or Ctrl+T to talk…", id="input-box")
+        yield Input(placeholder="❯ Enter command, /help, or Ctrl+T to talk…", id="input-box")
         yield OptionList(id="slash-suggestions")
         yield Static(self._status_text(), id="status-bar")
         yield Footer()
@@ -671,58 +638,56 @@ class OblivionApp(App):
         msgs = len(self.agent.conversation) if self.agent else 0
         workspace = os.path.basename(os.getenv("WORKSPACE_DIR", ".")) or "root"
 
-        # Show DEFAULT model AND actual last-used (if different)
-        default_model = os.getenv("DEFAULT_MODEL", "none").split("/")[-1][:20]
+        # Model display
+        default_model = os.getenv("DEFAULT_MODEL", "none").split("/")[-1][:18]
         model_display = default_model
         try:
             last_used = getattr(self.agent.llm, "last_used_model", None)
             if last_used:
-                last_short = last_used.split("/")[-1][:20]
+                last_short = last_used.split("/")[-1][:18]
                 if last_short != default_model:
                     model_display = f"{default_model}→{last_short}"
         except Exception:
             pass
 
-        # Token stats
+        # Token stats formatted in K
         try:
             tokens = self.agent.llm.get_token_stats()
-            tok_str = "tok:" + str(tokens["total"])
+            t_total = tokens["total"]
+            tok_str = f"{t_total/1000:.1f}k" if t_total >= 1000 else str(t_total)
         except Exception:
-            tok_str = "tok:0"
+            tok_str = "0"
 
-        # Exhausted models indicator
-        exhausted_str = ""
+        # Rate-limited indicator badge
+        exhausted_badge = ""
         try:
             exh = self.agent.llm.get_exhausted_models()
             if exh:
-                exhausted_str = f"  |  [#febc2e]⚠{len(exh)} rate-limited[/#febc2e]"
+                exhausted_badge = f" [bold #09090b on #f59e0b] ⚠ {len(exh)} RATE-LIMITED [/]"
         except Exception:
             pass
 
         # AUTO mode indicator
-        auto_prefix = ""
+        auto_badge = ""
         try:
             st = self._runtime_state()
             if st.get("auto_mode"):
-                auto_prefix = "[bold #febc2e][AUTO][/bold #febc2e] "
+                auto_badge = "[bold #09090b on #f59e0b] AUTO [/] "
         except Exception:
             pass
 
+        # Lualine Powerline Status Segments
         if self.agent_busy:
-            status = auto_prefix + "thinking"
+            state_seg = f"{auto_badge}[bold #09090b on #f59e0b] 🧠 THINKING [/]"
         else:
-            status = auto_prefix + "ready"
+            state_seg = f"{auto_badge}[bold #09090b on #10b981] ⚡ READY [/]"
 
-        return (
-            " " + status
-            + "  |  " + model_display
-            + "  |  " + workspace
-            + "  |  msg:" + str(msgs)
-            + "  |  " + tok_str
-            + "  |  step:" + str(self.iteration_count)
-            + exhausted_str
-            + "  |  ^Q quit  ^H help"
-        )
+        model_seg = f"[bold #e0e7ff on #27272a] 🤖 {model_display} [/]"
+        ws_seg = f"[bold #67e8f9 on #181820] 📁 {workspace} [/]"
+        stats_seg = f"[#a1a1aa on #09090b] msg:{msgs} │ tok:{tok_str} │ step:{self.iteration_count} [/]"
+        hint_seg = f"[dim #71717a on #09090b] ^Q quit │ ^H help [/]"
+
+        return f"{state_seg}{model_seg}{ws_seg}{stats_seg}{exhausted_badge} {hint_seg}"
 
 
     def _render_waveform(self) -> str:
@@ -1338,7 +1303,6 @@ class OblivionApp(App):
             # Show detailed rate limit status
             try:
                 exh = self.agent.llm.get_exhausted_models()
-                from agent.models import MODELS, get_rate_delay
                 from agent.llm import FALLBACK_CHAIN
 
                 lines = ["[bold #67e8f9]═══ RATE LIMIT STATUS ═══[/bold #67e8f9]", ""]
