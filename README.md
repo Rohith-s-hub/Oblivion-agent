@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🔮 OBLIVION AI
+# 🌀 OBLIVION AI
 
 ### The Open-Source Terminal AI Coding Agent — Voice-Native, Self-Hosted, Zero Lock-In
 
@@ -9,7 +9,8 @@
 [![PyPI version](https://img.shields.io/pypi/v/oblivion-agent.svg?color=8b5cf6)](https://pypi.org/project/oblivion-agent/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-22d3ee.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Downloads](https://img.shields.io/pypi/dm/oblivion-agent?color=67e8f9)](https://pypi.org/project/oblivion-agent/)
+[![Total Downloads](https://static.pepy.tech/badge/oblivion-agent)](https://pepy.tech/project/oblivion-agent)
+[![Weekly Downloads](https://img.shields.io/pypi/dw/oblivion-agent?color=67e8f9&label=downloads%2Fweek)](https://pypi.org/project/oblivion-agent/)
 [![Built with Textual](https://img.shields.io/badge/TUI-Textual-blueviolet)](https://github.com/Textualize/textual)
 
 *"Code is conversation. Make it natural."* — **M.E.E.R.A.**
@@ -96,48 +97,24 @@ No API keys required to get started — Oblivion's default fallback chain runs o
 
 ### 3-Layer Hybrid Search Engine
 
-```
-                    ┌─────────────────────────────────────────┐
-                    │               USER QUERY                 │
-                    │   "Where is parse_llm_output defined?"    │
-                    └────────────────────┬──────────────────────┘
-                                          │
-                   ┌──────────────────────┼──────────────────────┐
-                   │                      │                      │
-                   ▼                      ▼                      ▼
-        ┌───────────────────┐  ┌────────────────────┐  ┌───────────────────┐
-        │  LAYER 1: SYMBOL  │  │  LAYER 2: FTS5 TEXT│  │  LAYER 3: VECTOR   │
-        │   SQLite Table    │  │    SQLite FTS5      │  │  ChromaDB + MiniLM │
-        │  Exact Names Only │  │  Full-Text Match     │  │  Concept Matcher    │
-        └─────────┬─────────┘  └─────────┬───────────┘  └─────────┬──────────┘
-                  │                       │                        │
-                  └───────────────────────┼────────────────────────┘
-                                          │
-                                          ▼
-                   ┌──────────────────────────────────────────┐
-                   │            MERGE & RANK ENGINE             │
-                   │  1. Deduplicates exact line ranges         │
-                   │  2. Symbol matches ALWAYS win rank #1      │
-                   │  3. Merges vector context for fallback     │
-                   └──────────────────────────────────────────┘
-```
+**Query:** `"Where is parse_llm_output defined?"`
+
+The same query fans out to all three layers in parallel, then gets merged into one ranked result:
+
+| Layer | Engine | What it catches |
+|---|---|---|
+| **1 — Symbol** | SQLite table | Exact function/class/variable names — always ranked first when matched |
+| **2 — Full-text** | SQLite FTS5 | Literal text matches anywhere in the codebase |
+| **3 — Vector** | ChromaDB + MiniLM | Conceptual/semantic matches, even with no shared keywords |
+
+**Merge & rank:** exact line ranges are deduplicated → symbol hits always win rank #1 → vector context fills in as fallback for anything the first two layers missed.
 
 ### Reasoning & Execution Loop
 
-```
- User Prompt ──▶ M.E.E.R.A. (ReAct Loop) ──▶ Tool Selection (38 tools)
-                       │                              │
-                       │                              ▼
-                       │                    ┌─────────────────────┐
-                       │                    │  3-Tier Safety Gate  │
-                       │                    │  Read / Mutate /     │
-                       │                    │  Destructive          │
-                       │                    └──────────┬──────────┘
-                       │                               │
-                       ▼                               ▼
-              Model Fallback Chain            Diff Preview + Execute
-        (Ollama Cloud → Gemini → Groq → …)     (atomic batch_edit)
-```
+1. **User prompt** goes to **M.E.E.R.A.**, which runs a ReAct loop — reason, act, observe, repeat.
+2. M.E.E.R.A. selects from its **38 tools** and routes the request through the **13-model fallback chain** (Ollama Cloud → Gemini → Groq → …) for the actual completion.
+3. Any tool call that touches your code passes through the **3-tier safety gate** — Read / Mutate / Destructive.
+4. Read-tier actions run immediately. Mutate and Destructive actions generate a **diff preview** first, and only execute (atomically, via `batch_edit`) once approved.
 
 **Tech stack:** Python 3.11+, [Textual](https://github.com/Textualize/textual) TUI framework with cyberpunk styling, SQLite (FTS5), ChromaDB, faster-whisper (STT), Edge-TTS / ElevenLabs (TTS), Model Context Protocol (MCP).
 
