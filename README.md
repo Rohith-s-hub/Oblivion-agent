@@ -1,100 +1,155 @@
-# OBLIVION AI 🔮
-### Open-Source Terminal AI Coding Agent with Voice, 3-Layer RAG, and MCP Server
+<div align="center">
+
+# 🔮 OBLIVION AI
+
+### The Open-Source Terminal AI Coding Agent — Voice-Native, Self-Hosted, Zero Lock-In
+
+**A privacy-first, zero-cost alternative to Cursor, GitHub Copilot, and Claude Code — running entirely in your terminal.**
 
 [![PyPI version](https://img.shields.io/pypi/v/oblivion-agent.svg?color=8b5cf6)](https://pypi.org/project/oblivion-agent/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-22d3ee.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Downloads](https://img.shields.io/pypi/dm/oblivion-agent?color=67e8f9)](https://pypi.org/project/oblivion-agent/)
+[![Built with Textual](https://img.shields.io/badge/TUI-Textual-blueviolet)](https://github.com/Textualize/textual)
 
-> *"Code is conversation. Make it natural."* — **M.E.E.R.A.**
+*"Code is conversation. Make it natural."* — **M.E.E.R.A.**
 
-Oblivion AI is a terminal-native, open-source AI coding agent built as a privacy-respecting, zero-cost alternative to proprietary tools like **Cursor, Copilot, and Claude Code**. It lives inside your terminal, understands your local codebase semantically, executes multi-file edits atomically, and responds via text or natural voice.
+[Quick Start](#-quick-start) • [Why Oblivion](#-why-oblivion) • [Architecture](#️-architecture) • [Comparison](#-oblivion-vs-the-rest) • [MCP Integration](#-mcp-server-integration) • [Roadmap](#-roadmap)
 
----
-
-
-
-## 🔮 Oblivion AI Agent — The Best Open Source Terminal AI Agent
-
-Oblivion AI is a terminal-native, open-source AI agent designed for developers who want a fast, privacy-first, and zero-cost alternative to proprietary coding tools. Functioning as a full **Oblivion Terminal Agent**, it lives inside your CLI, understands local codebases via 3-layer hybrid RAG, and executes multi-file code changes autonomously.
-
-
-## 🌟 Key Highlights
-
-* 🤖 **M.E.E.R.A. Core:** Powered by Multi-modal Engineering and Reasoning Assistant.
-* ⚡ **Multi-Model Resilience:** Auto-fallback chain across **Ollama Cloud, Gemini 2.5, and Groq** with smart rate-limit cooldowns.
-* 🎙️ **Voice I/O & Wake Word:** Background listening (`Hey Jarvis`), silence auto-stop (3s pause), and 8 neural voice personas via Edge-TTS / ElevenLabs.
-* 🔍 **3-Layer Hybrid Search:** Instant exact symbol lookup (SQLite FTS5) + Full-text search + Vector semantic embeddings (ChromaDB).
-* 🔌 **Built-in MCP Server:** Exposes 10 read-only code intelligence tools directly to **Claude Desktop, Cursor, and Zed**.
-* 🛡️ **3-Tier Safety System:** Read, Mutate, and Destructive tiers with unified diff previews before execution.
-* 🧰 **38 Agent Tools:** Full Git suite, test runners, multi-file atomic `batch_edit`, DuckDuckGo web search, PyPI/npm lookup, and background server management.
-* 📟 **Intel 8085 CPU Emulator:** Built-in microprocessor simulator and assembler.
+</div>
 
 ---
 
-## 🎬 Live Demo
+## 🧭 What is Oblivion?
 
-[![asciicast](https://asciinema.org/a/JWUP4sCednONtw0l.svg)](https://asciinema.org/a/JWUP4sCednONtw0l)
+**Oblivion AI** is a terminal-native, fully open-source AI coding agent built around **M.E.E.R.A.** (Multi-modal Engineering and Reasoning Assistant) — an autonomous ReAct-style engineering partner that lives in your CLI, understands your codebase semantically, edits multiple files atomically, and talks back with a real voice if you want it to.
 
-*Experience Oblivion AI in action: Multi-file generation, terminal UI, and real-time tool tracking.*
+It was built on the premise that the best coding agent shouldn't require a subscription, a cloud account, or your code leaving your machine to be genuinely useful. Oblivion runs against free and local LLM backends by default, indexes your repository with a three-layer hybrid search engine, and exposes its own code-intelligence tools to *other* editors over MCP — so it plays well with the tools you already use instead of competing with them.
 
 ---
 
 ## ⚡ Quick Start
 
-### Installation
-
 ```bash
 # Basic text-only install
 pip install oblivion-agent
 
-# With local Voice STT + Neural TTS support (Recommended)
+# With local Voice STT + Neural TTS support (recommended)
 pip install "oblivion-agent[voice]"
 
 # With premium ElevenLabs voice support
 pip install "oblivion-agent[all]"
-Run Oblivion AI
-Bash
+```
 
-# Launch Terminal UI (TUI)
+```bash
+# Launch the Terminal UI
 oblivion
 
-# Launch MCP Server (for Claude Desktop / Cursor)
+# Launch the MCP server (for Claude Desktop / Cursor / Zed)
 oblivion mcp
 
-# Open MCP Inspector in Browser
+# Open the MCP Inspector in your browser
 oblivion inspect
-🏗️ 3-Layer Hybrid Search Architecture
-text
+```
 
+No API keys required to get started — Oblivion's default fallback chain runs on free-tier and local models out of the box.
+
+---
+
+## 🌟 Why Oblivion
+
+| | |
+|---|---|
+| 🤖 **M.E.E.R.A. Core** | A ReAct-loop reasoning engine, not a single-shot autocomplete — plans, calls tools, observes results, and iterates. |
+| ⚡ **13-Model Fallback Chain** | Auto-cascades across Ollama Cloud, Gemini, Groq, OpenRouter and more with smart rate-limit cooldowns, so you rarely hit a dead end. |
+| 🎙️ **Real Voice I/O** | Wake-word activation ("Hey Jarvis"), silence-based auto-stop, and 8 neural voice personas via Edge-TTS / ElevenLabs. |
+| 🔍 **3-Layer Hybrid Search** | Exact symbol lookup (SQLite FTS5) + full-text search + vector semantic embeddings (ChromaDB) with AST-aware chunking. |
+| 🔌 **Built-in MCP Server** | Exposes 10 read-only code-intelligence tools directly to Claude Desktop, Cursor, and Zed — Oblivion augments your other tools too. |
+| 🛡️ **3-Tier Safety System** | Read / Mutate / Destructive action tiers, with unified diff previews before anything touches disk. |
+| 🧰 **38 Agent Tools** | Full Git suite, test runners, atomic multi-file `batch_edit`, web search, PyPI/npm lookups, background server management. |
+| 📚 **14 Domain Knowledge Packs** | Auto-detected, context-aware packs (React, Next.js, Django, Security, and more), capped at 2 per request to stay lean. |
+| 💻 **Runs on Modest Hardware** | Developed and validated end-to-end on a 13GB RAM laptop with no GPU. |
+| 📟 **Bonus: Intel 8085 Emulator** | A full microprocessor simulator and assembler, tucked inside the same TUI. |
+
+---
+
+## 🆚 Oblivion vs. The Rest
+
+| Capability | **Oblivion AI** | Cursor | GitHub Copilot | Claude Code |
+|---|:---:|:---:|:---:|:---:|
+| Open source | ✅ MIT | ❌ | ❌ | ❌ |
+| Cost to run | **Free** (local/free-tier LLMs) | Subscription | Subscription | Usage-based |
+| Runs fully in terminal | ✅ | ❌ (IDE fork) | ❌ (IDE plugin) | ✅ |
+| Multi-model fallback chain | ✅ 13 backends | ❌ single provider | ❌ single provider | ❌ single provider |
+| Local-model support | ✅ Ollama | ❌ | ❌ | ❌ |
+| Native voice I/O | ✅ wake-word + TTS/STT | ❌ | ❌ | ❌ |
+| Hybrid symbol + semantic search | ✅ 3-layer (FTS5 + ChromaDB) | Semantic only | Limited | Semantic only |
+| Exposes its own MCP server | ✅ 10 tools | ❌ | ❌ | ❌ |
+| Tiered write-safety with diff previews | ✅ 3-tier | Partial | ❌ | ✅ |
+| Data leaves your machine | Optional (local mode available) | Yes | Yes | Yes |
+
+*Oblivion doesn't aim to replace every workflow — it aims to be the agent that works the same way whether you have a $0 budget or an enterprise API key, and hands its own code intelligence to whichever other tool you're already using.*
+
+---
+
+## 🏗️ Architecture
+
+### 3-Layer Hybrid Search Engine
+
+```
                     ┌─────────────────────────────────────────┐
-                    │            USER QUERY                   │
-                    │   "Where is parse_llm_output defined?"  │
-                    └────────────────────┬────────────────────┘
-                                         │
-                   ┌─────────────────────┼─────────────────────┐
-                   │                     │                     │
-                   ▼                     ▼                     ▼
-        ┌───────────────────┐ ┌────────────────────┐ ┌───────────────────┐
-        │  LAYER 1: SYMBOL  │ │  LAYER 2: FTS5 TEXT│ │ LAYER 3: VECTOR   │
-        │   SQLite Table    │ │   SQLite FTS5      │ │ ChromaDB + minilm │
-        │  Exact Names Only │ │ Full-Text Match    │ │ Concept Matcher   │
-        └─────────┬─────────┘ └─────────┬──────────┘ └─────────┬─────────┘
-                  │                     │                      │
-                  └─────────────────────┼──────────────────────┘
-                                        │
-                                        ▼
-                   ┌─────────────────────────────────────────┐
-                   │          MERGE & RANK ENGINE            │
-                   │  1. Deduplicates exact line ranges      │
-                   │  2. Symbol matches ALWAYS win rank #1    │
-                   │  3. Merges vector context for fallback  │
-                   └─────────────────────────────────────────┘
-🔌 Claude Desktop MCP Integration
-Connect Oblivion's code intelligence directly into Claude Desktop by adding this to your claude_desktop_config.json:
+                    │               USER QUERY                 │
+                    │   "Where is parse_llm_output defined?"    │
+                    └────────────────────┬──────────────────────┘
+                                          │
+                   ┌──────────────────────┼──────────────────────┐
+                   │                      │                      │
+                   ▼                      ▼                      ▼
+        ┌───────────────────┐  ┌────────────────────┐  ┌───────────────────┐
+        │  LAYER 1: SYMBOL  │  │  LAYER 2: FTS5 TEXT│  │  LAYER 3: VECTOR   │
+        │   SQLite Table    │  │    SQLite FTS5      │  │  ChromaDB + MiniLM │
+        │  Exact Names Only │  │  Full-Text Match     │  │  Concept Matcher    │
+        └─────────┬─────────┘  └─────────┬───────────┘  └─────────┬──────────┘
+                  │                       │                        │
+                  └───────────────────────┼────────────────────────┘
+                                          │
+                                          ▼
+                   ┌──────────────────────────────────────────┐
+                   │            MERGE & RANK ENGINE             │
+                   │  1. Deduplicates exact line ranges         │
+                   │  2. Symbol matches ALWAYS win rank #1      │
+                   │  3. Merges vector context for fallback     │
+                   └──────────────────────────────────────────┘
+```
 
-JSON
+### Reasoning & Execution Loop
 
+```
+ User Prompt ──▶ M.E.E.R.A. (ReAct Loop) ──▶ Tool Selection (38 tools)
+                       │                              │
+                       │                              ▼
+                       │                    ┌─────────────────────┐
+                       │                    │  3-Tier Safety Gate  │
+                       │                    │  Read / Mutate /     │
+                       │                    │  Destructive          │
+                       │                    └──────────┬──────────┘
+                       │                               │
+                       ▼                               ▼
+              Model Fallback Chain            Diff Preview + Execute
+        (Ollama Cloud → Gemini → Groq → …)     (atomic batch_edit)
+```
+
+**Tech stack:** Python 3.11+, [Textual](https://github.com/Textualize/textual) TUI framework with cyberpunk styling, SQLite (FTS5), ChromaDB, faster-whisper (STT), Edge-TTS / ElevenLabs (TTS), Model Context Protocol (MCP).
+
+**Scale (v3.1.0, Aug 2026):** ~45 Python files · ~12,000+ lines of code · 4,000+ downloads on PyPI · 38 tools (22 read-tier, 13 mutate-tier, 1 destructive, 1 special) · 6-model smart-cooldown fallback for the default configuration, expandable to 13 supported backends.
+
+---
+
+## 🔌 MCP Server Integration
+
+Oblivion isn't just a standalone agent — it also *serves* its code-intelligence layer to other editors over the Model Context Protocol. Add this to your `claude_desktop_config.json` to give Claude Desktop, Cursor, or Zed direct access to Oblivion's 3-layer search and symbol index:
+
+```json
 {
   "mcpServers": {
     "oblivion": {
@@ -106,12 +161,59 @@ JSON
     }
   }
 }
-👨‍💻 Creator & Community
-Oblivion AI was designed and built by Rohith R. (@Rohith-s-hub), a BSc Computer Science student from Tamil Nadu, India.
+```
 
-🌐 Website: oblivion.run.place
-🐙 GitHub: @Rohith-s-hub
-💼 LinkedIn: Rohith Rajkumar
-📦 PyPI: oblivion-agent
-📄 License
-Distributed under the MIT License. Free for personal, academic, and commercial use.
+This exposes 10 read-only tools — symbol lookup, semantic search, file structure inspection, and more — so your existing editor gets Oblivion's understanding of the codebase without needing to run the full agent inside it.
+
+---
+
+## 🎙️ Voice-First Workflow
+
+- **Wake-word activation:** say *"Hey Jarvis"* to start a session hands-free.
+- **Silence-based auto-stop:** a 3-second pause automatically ends your utterance — no push-to-talk needed.
+- **8 neural voice personas** via Edge-TTS (free) or ElevenLabs (premium), so M.E.E.R.A. can sound however you want it to.
+- Built on `faster-whisper` for local speech-to-text, keeping voice interaction private by default.
+
+---
+
+## 🛡️ Safety Model
+
+Every action Oblivion can take falls into one of three tiers, and nothing in the Mutate or Destructive tiers runs without a **unified diff preview** first:
+
+| Tier | Examples | Confirmation |
+|---|---|---|
+| **Read** (22 tools) | File search, symbol lookup, git log, test discovery | None needed |
+| **Mutate** (13 tools) | Multi-file `batch_edit`, git commit, dependency install | Diff preview shown |
+| **Destructive** (1 tool) | File/branch deletion | Explicit confirmation required |
+
+---
+
+## 🗺️ Roadmap
+
+- Jarvis-style voice personality: barge-in interruption, proactive unprompted commentary, emotion-aware tone adjustment
+- Continued expansion of the free-model fallback chain (Kimi K2, GLM-5.2, Qwen3-Coder and beyond)
+- Refactor of the TUI dashboard into smaller, more maintainable modules
+- Deeper MCP tool surface for third-party editor integrations
+
+---
+
+## 📄 License
+
+Distributed under the **MIT License** — free for personal, academic, and commercial use.
+
+---
+
+## 👨‍💻 Creator & Community
+
+Oblivion AI is designed and built by **R. Rohith** ([@Rohith-s-hub](https://github.com/Rohith-s-hub)), a final-year B.Sc. Computer Science student from Tamil Nadu, India.
+
+- 🌐 **Website:** [oblivion.run.place](https://oblivion.run.place)
+- 🐙 **GitHub:** [@Rohith-s-hub](https://github.com/Rohith-s-hub)
+- 💼 **LinkedIn:** [Rohith Rajkumar](https://www.linkedin.com/in/rohith-rajkumar-040676315)
+- 📦 **PyPI:** [oblivion-agent](https://pypi.org/project/oblivion-agent/)
+
+<div align="center">
+
+⭐ **If Oblivion saves you a subscription or two, consider starring the repo.** ⭐
+
+</div>
