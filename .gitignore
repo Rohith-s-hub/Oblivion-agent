@@ -100,3 +100,4 @@ tts_cache/
 .whisper*
 agent/*.bak*
 ui/*.bak*
+"$x"
