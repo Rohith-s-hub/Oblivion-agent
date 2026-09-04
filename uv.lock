@@ -1743,7 +1743,7 @@ wheels = [
 
 [[package]]
 name = "oblivion-agent"
-version = "3.3.0"
+version = "3.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },

@@ -1,17 +1,14 @@
+
 """
 Voice input for Oblivion.
-Records mic audio with VAD and transcribes via Whisper.
+Simple blocking recorder + Whisper STT (no callback stream = no fds_to_keep).
 """
 import os
-import io
 import time
 import threading
-import wave
 from pathlib import Path
 from typing import Optional, Callable
 
-# Voice deps are OPTIONAL. Install via: pip install oblivion-agent[voice]
-# If missing, voice tools raise a friendly error instead of crashing at import.
 try:
     import numpy as np
     import sounddevice as sd
@@ -28,333 +25,231 @@ except ImportError as _e:
 SAMPLE_RATE = 16000
 CHANNELS = 1
 DTYPE = "int16"
-# All voice params are env-configurable via ~/.oblivion/config.env
-MAX_RECORD_SECONDS = int(os.getenv("VOICE_MAX_RECORD", "60"))
-SILENCE_THRESHOLD = int(os.getenv("VOICE_SILENCE_THRESHOLD", "1200"))  # higher = tolerates more noise
-SILENCE_DURATION = float(os.getenv("VOICE_SILENCE_DURATION", "1.5"))  # 3s pause = auto-stop
-MIN_RECORD_SECONDS = float(os.getenv("VOICE_MIN_RECORD", "0.8"))  # min duration before silence check
+MAX_RECORD_SECONDS = int(os.getenv("VOICE_MAX_RECORD", "8"))
+SILENCE_THRESHOLD = int(os.getenv("VOICE_SILENCE_THRESHOLD", "500"))
+SILENCE_DURATION = float(os.getenv("VOICE_SILENCE_DURATION", "0.7"))
+MIN_RECORD_SECONDS = float(os.getenv("VOICE_MIN_RECORD", "0.35"))
 
 from agent.paths import whisper_dir
 MODEL_DIR = whisper_dir()
 
-_whisper_model: Optional[WhisperModel] = None  # cleared via clear_model()
+_whisper_model = None
+_mic_lock = threading.Lock()
 
 
 def get_whisper_model(model_size: str = None):
-    """Returns a loaded WhisperModel, or raises RuntimeError if voice deps missing."""
     if not VOICE_AVAILABLE:
         raise RuntimeError(
             "Voice support not installed. Install with:\n"
-            "  pip install \"oblivion-agent[voice]\"\n"
+            '  pip install "oblivion-agent[voice]"\n'
             f"(missing: {_VOICE_IMPORT_ERROR})"
         )
     global _whisper_model
     if _whisper_model is not None:
         return _whisper_model
 
-    size = model_size or os.getenv("VOICE_MODEL", "base.en")
-
+    size = model_size or os.getenv("VOICE_MODEL", "tiny.en")
     try:
         import torch
         device = "cuda" if torch.cuda.is_available() else "cpu"
     except ImportError:
         device = "cpu"
-
     compute_type = "int8" if device == "cpu" else "float16"
 
-    print(f"Loading Whisper '{size}' on {device} (one-time download if first run)...")
-    _whisper_model = WhisperModel(
-        size,
-        device=device,
-        compute_type=compute_type,
-        download_root=str(MODEL_DIR),
-    )
-    print(f"OK: Whisper '{size}' loaded ({device}/{compute_type})")
+    import contextlib
+    with open(os.devnull, "w") as devnull, contextlib.redirect_stderr(devnull):
+        _whisper_model = WhisperModel(
+            size,
+            device=device,
+            compute_type=compute_type,
+            download_root=str(MODEL_DIR),
+        )
     return _whisper_model
 
 
 def clear_model():
-    """Force reload of Whisper model (after changing size)."""
     global _whisper_model
     _whisper_model = None
 
 
-def list_input_devices() -> list[dict]:
+def list_input_devices() -> list:
     if not VOICE_AVAILABLE:
         return []
     devices = sd.query_devices()
-    inputs = []
+    out = []
+    default_idx = -1
+    try:
+        default_idx = sd.default.device[0]
+    except Exception:
+        pass
     for i, d in enumerate(devices):
-        if d["max_input_channels"] > 0:
-            inputs.append({
+        if d.get("max_input_channels", 0) > 0:
+            out.append({
                 "index": i,
-                "name": d["name"],
-                "channels": d["max_input_channels"],
-                "default": i == sd.default.device[0] if sd.default.device else False,
+                "name": d.get("name", ""),
+                "default": i == default_idx,
             })
-    return inputs
+    return out
 
 
 def get_default_input_device() -> int:
-    if not VOICE_AVAILABLE:
-        return 0
     try:
-        return sd.default.device[0]
+        return int(sd.default.device[0])
     except Exception:
         return 0
 
 
+def _release_portaudio():
+    if not VOICE_AVAILABLE:
+        return
+    try:
+        sd.stop()
+    except Exception:
+        pass
+    time.sleep(0.2)
+
+
 class VoiceRecorder:
+    """Blocking chunk recorder — avoids PortAudio callback FD issues."""
+
     def __init__(
         self,
         on_level: Optional[Callable[[float], None]] = None,
         on_status: Optional[Callable[[str], None]] = None,
         device: Optional[int] = None,
     ):
-        self.on_level = on_level or (lambda l: None)
+        self.on_level = on_level or (lambda r: None)
         self.on_status = on_status or (lambda s: None)
         self.device = device if device is not None else get_default_input_device()
         self._stop_flag = threading.Event()
-        self._audio_buffer: list = []
-        self._silence_start: Optional[float] = None
-        self._record_start: Optional[float] = None
+        self._audio_buffer = []
 
     def stop(self):
         self._stop_flag.set()
 
     def record(self):
         if not VOICE_AVAILABLE:
-            raise RuntimeError("Voice not installed. pip install oblivion-agent[voice]")
+            raise RuntimeError("Voice not installed")
+
         self._stop_flag.clear()
-        self._audio_buffer.clear()
-        self._silence_start = None
-        self._record_start = time.time()
+        self._audio_buffer = []
         self.on_status("recording")
 
-        # Dynamic noise floor estimation
-        self._noise_floor = 400.0
-        self._has_spoken = False
+        chunk_s = 0.1
+        chunk_frames = int(SAMPLE_RATE * chunk_s)
+        max_chunks = int(MAX_RECORD_SECONDS / chunk_s)
+        min_chunks = int(MIN_RECORD_SECONDS / chunk_s)
+        silence_needed = max(1, int(SILENCE_DURATION / chunk_s))
 
-        def callback(indata, frames, time_info, status):
-            chunk = indata.copy().flatten()
-            self._audio_buffer.append(chunk)
-
-            rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
-            self.on_level(rms)
-
-            elapsed = time.time() - self._record_start
-
-            if elapsed >= MIN_RECORD_SECONDS:
-                if rms < SILENCE_THRESHOLD:
-                    if self._silence_start is None:
-                        self._silence_start = time.time()
-                    elif time.time() - self._silence_start >= SILENCE_DURATION:
-                        self._stop_flag.set()
-                        raise sd.CallbackStop()
-                else:
-                    self._silence_start = None
-
-            if elapsed >= MAX_RECORD_SECONDS:
-                self._stop_flag.set()
-                raise sd.CallbackStop()
-
-            if elapsed >= MAX_RECORD_SECONDS:
-                self._stop_flag.set()
-                raise sd.CallbackStop()
+        got_lock = _mic_lock.acquire(timeout=3.0)
+        if not got_lock:
+            self.on_status("error: mic lock timeout")
+            return np.array([], dtype=np.int16)
 
         try:
-            with sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype=DTYPE,
-                callback=callback,
-                device=self.device,
-                blocksize=int(SAMPLE_RATE * 0.05),
-            ):
-                while not self._stop_flag.is_set():
-                    if time.time() - self._record_start >= MAX_RECORD_SECONDS:
-                        break
-                    time.sleep(0.05)
-        except Exception as e:
-            self.on_status(f"error: {e}")
-            return np.array([], dtype=np.int16)
+            _release_portaudio()
+            silence_run = 0
+            has_spoken = False
+            noise_floor = 200.0
 
-        self.on_status("stopped")
+            for i in range(max_chunks):
+                if self._stop_flag.is_set():
+                    break
+                try:
+                    block = sd.rec(
+                        chunk_frames,
+                        samplerate=SAMPLE_RATE,
+                        channels=CHANNELS,
+                        dtype=DTYPE,
+                        device=self.device,
+                        blocking=True,
+                    )
+                except Exception:
+                    _release_portaudio()
+                    time.sleep(0.35)
+                    try:
+                        block = sd.rec(
+                            chunk_frames,
+                            samplerate=SAMPLE_RATE,
+                            channels=CHANNELS,
+                            dtype=DTYPE,
+                            device=self.device,
+                            blocking=True,
+                        )
+                    except Exception as e2:
+                        self.on_status(f"error: {e2}")
+                        return np.array([], dtype=np.int16)
 
-        if not self._audio_buffer:
-            return np.array([], dtype=np.int16)
+                chunk = np.asarray(block).reshape(-1).astype(np.int16)
+                self._audio_buffer.append(chunk)
 
-        return np.concatenate(self._audio_buffer)
+                rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2))) + 1e-6
+                self.on_level(rms)
+
+                if i < 3:
+                    noise_floor = min(noise_floor, rms)
+                gate = max(SILENCE_THRESHOLD, noise_floor * 2.0)
+
+                if rms > gate:
+                    has_spoken = True
+                    silence_run = 0
+                else:
+                    silence_run += 1
+
+                if i >= min_chunks and has_spoken and silence_run >= silence_needed:
+                    break
+
+            self.on_status("stopped")
+            if not self._audio_buffer:
+                return np.array([], dtype=np.int16)
+            return np.concatenate(self._audio_buffer)
+        finally:
+            try:
+                sd.stop()
+            except Exception:
+                pass
+            _mic_lock.release()
 
     def record_until_stopped(self):
-        """
-        Press-to-talk mode: records continuously until .stop() is called.
-        Does NOT use silence detection - good for noisy rooms.
-        """
-        if not VOICE_AVAILABLE:
-            raise RuntimeError("Voice not installed. pip install oblivion-agent[voice]")
-        self._stop_flag.clear()
-        self._audio_buffer.clear()
-        self._record_start = time.time()
-        self.on_status("recording")
-
-        def callback(indata, frames, time_info, status):
-            chunk = indata.copy().flatten()
-            self._audio_buffer.append(chunk)
-
-            rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
-            self.on_level(rms)
-
-            elapsed = time.time() - self._record_start
-
-            if elapsed >= MIN_RECORD_SECONDS:
-                if rms < SILENCE_THRESHOLD:
-                    if self._silence_start is None:
-                        self._silence_start = time.time()
-                    elif time.time() - self._silence_start >= SILENCE_DURATION:
-                        self._stop_flag.set()
-                        raise sd.CallbackStop()
-                else:
-                    self._silence_start = None
-
-            if elapsed >= MAX_RECORD_SECONDS:
-                self._stop_flag.set()
-                raise sd.CallbackStop()
-
-        try:
-            with sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype=DTYPE,
-                callback=callback,
-                device=self.device,
-                blocksize=int(SAMPLE_RATE * 0.05),
-            ):
-                while not self._stop_flag.is_set():
-                    time.sleep(0.05)
-        except Exception as e:
-            self.on_status(f"error: {e}")
-            return np.array([], dtype=np.int16)
-
-        self.on_status("stopped")
-        if not self._audio_buffer:
-            return np.array([], dtype=np.int16)
-        return np.concatenate(self._audio_buffer)
+        return self.record()
 
 
 def transcribe(audio, language: str = "en") -> str:
     if not VOICE_AVAILABLE:
         return ""
-    """
-    Transcribe audio via Whisper.
-    Uses an initial prompt to bias toward coding terms and common Indian names.
-    """
-    if len(audio) == 0:
+    if audio is None or len(audio) == 0:
         return ""
 
     audio_float = audio.astype(np.float32) / 32768.0
     model = get_whisper_model()
-
-    # Initial prompt biases Whisper toward expected vocabulary
-    # This dramatically improves accuracy for names, technical terms, and accents
-    initial_prompt = (
-        "User is a software developer named Rohit from Sivakasi, India. "
-        "His AI assistant is named Meera (pronounced MEE-rah, spelled M-E-E-R-A). "
-        "The coding agent is called Oblivion. "
-        "Common phrases: 'Hey Meera', 'Meera, do this', 'thanks Meera', 'Oblivion'. "
-        "Coding terms: Python, JavaScript, Frappe, doctype, agent, ReAct, LLM, "
-        "function, class, file, folder, directory, create, edit, delete, "
-        "read, search, refactor, run, list."
-    )
+    initial_prompt = "Meera, Oblivion, Rohit. Python, JavaScript, file, folder, code."
 
     segments, info = model.transcribe(
         audio_float,
-        beam_size=5,
-        language="en",
+        beam_size=int(os.getenv("VOICE_BEAM_SIZE", "1")),
+        best_of=1,
+        language=language or "en",
         initial_prompt=initial_prompt,
         vad_filter=True,
-        vad_parameters=dict(
-            min_silence_duration_ms=500,
-        ),
+        vad_parameters=dict(min_silence_duration_ms=250),
+        condition_on_previous_text=False,
+        without_timestamps=True,
     )
-
-    text = " ".join(seg.text.strip() for seg in segments).strip()
-    return text
+    return " ".join(seg.text.strip() for seg in segments).strip()
 
 
 def record_and_transcribe(
-    on_level: Optional[Callable[[float], None]] = None,
-    on_status: Optional[Callable[[str], None]] = None,
-    device: Optional[int] = None,
+    on_level=None,
+    on_status=None,
+    device=None,
     language: str = "en",
     push_to_talk: bool = False,
-    stop_event: Optional[threading.Event] = None,
 ) -> str:
-    """
-    Record and transcribe in one call.
-
-    push_to_talk=False  -> Auto-stop on silence (good for quiet rooms)
-    push_to_talk=True   -> Records until stop_event is set (good for noisy rooms)
-    """
     recorder = VoiceRecorder(on_level=on_level, on_status=on_status, device=device)
-
-    if push_to_talk:
-        # External stop control
-        def watch_stop():
-            if stop_event is not None:
-                stop_event.wait()
-                recorder.stop()
-        if stop_event is not None:
-            threading.Thread(target=watch_stop, daemon=True).start()
-        audio = recorder.record_until_stopped()
-    else:
-        audio = recorder.record()
-
+    audio = recorder.record()
     if on_status:
         on_status("transcribing")
     text = transcribe(audio, language=language)
     if on_status:
         on_status("done")
     return text
-
-
-if __name__ == "__main__":
-    import sys
-    print("Available input devices:")
-    for d in list_input_devices():
-        marker = " *" if d["default"] else "  "
-        print(f"{marker} [{d['index']}] {d['name']} ({d['channels']} ch)")
-
-    print("\nLoading Whisper model...")
-    get_whisper_model()
-
-    print("\n" + "=" * 60)
-    print("PRESS-TO-TALK MODE (good for noisy rooms)")
-    print("=" * 60)
-    print("1. Press Enter to START recording")
-    print("2. Speak your message")
-    print("3. Press Enter again to STOP")
-    print("=" * 60)
-    input("\nReady? Press Enter to start...")
-
-    print("\n[REC] Recording... press Enter to STOP")
-
-    def show_level(rms):
-        bars = int(min(rms / 1500, 20))
-        print(f"\r  [{'#' * bars}{' ' * (20 - bars)}] {rms:6.0f}    ", end="", flush=True)
-
-    stop_event = threading.Event()
-
-    def wait_for_enter():
-        input()
-        stop_event.set()
-
-    threading.Thread(target=wait_for_enter, daemon=True).start()
-
-    text = record_and_transcribe(
-        on_level=show_level,
-        on_status=lambda s: print(f"\n=> {s}"),
-        push_to_talk=True,
-        stop_event=stop_event,
-    )
-    print(f"\nTranscription: {text!r}")

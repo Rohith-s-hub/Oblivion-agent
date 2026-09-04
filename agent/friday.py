@@ -83,7 +83,7 @@ def get_name() -> str:
 
 def get_rate() -> str:
     """Return speech rate string (e.g. '+0%', '+20%')."""
-    r = os.getenv("FRIDAY_RATE", "+0%").strip()
+    r = os.getenv("FRIDAY_RATE", "+15%").strip()
     return r if r.startswith(("+", "-")) else f"+{r}"
 
 
@@ -100,6 +100,48 @@ def set_on_speech_done_callback(cb: Optional[Callable[[str], None]]) -> None:
 
 
 # ── Audio Player Check ───────────────────────────────────────────────────────
+
+
+def _tts_cache_dir() -> Path:
+    d = Path.home() / ".oblivion" / "tts_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _cache_key(text: str, voice: str, rate: str) -> str:
+    import hashlib
+    h = hashlib.sha1(f"{voice}|{rate}|{text}".encode("utf-8")).hexdigest()[:16]
+    return h
+
+
+def _cached_mp3_path(text: str) -> Path:
+    return _tts_cache_dir() / f"{_cache_key(text, get_voice(), get_rate())}.mp3"
+
+
+def warmup_tts(phrases: list[str] | None = None) -> None:
+    """Pre-synthesize common lines into disk cache (background-safe)."""
+    if not is_enabled():
+        return
+    defaults = phrases or [
+        f"Good to see you, {get_name()}. M.E.E.R.A. online.",
+        f"Yes, {get_name()}?",
+        "Listening.",
+        "Go ahead.",
+        f"Online, {get_name()}.",
+        "Right away.",
+        "Done.",
+    ]
+    for p in defaults:
+        try:
+            path = _cached_mp3_path(p)
+            if path.exists() and path.stat().st_size > 500:
+                continue
+            tmp = str(path) + ".tmp"
+            if _synth_edge(p, tmp):
+                Path(tmp).replace(path)
+        except Exception:
+            pass
+
 
 def _ensure_player() -> bool:
     """Check if ffplay is available for audio playback."""
@@ -299,24 +341,40 @@ def speak(text: str, blocking: bool = False, auto_summarize: bool = True) -> Opt
             tmp.close()
             tmp_path = tmp.name
 
-            # Synthesize audio
+            # Prefer disk cache for instant playback (greetings / short lines)
             provider = get_provider()
             success = False
-
-            if provider == "elevenlabs":
-                success = _synth_elevenlabs(final_text, tmp_path)
-                if not success:
-                    success = _synth_edge(final_text, tmp_path)
+            play_path = tmp_path
+            cached = _cached_mp3_path(final_text)
+            if provider != "elevenlabs" and cached.exists() and cached.stat().st_size > 500:
+                play_path = str(cached)
+                success = True
             else:
-                success = _synth_edge(final_text, tmp_path)
+                if provider == "elevenlabs":
+                    success = _synth_elevenlabs(final_text, tmp_path)
+                    if not success:
+                        success = _synth_edge(final_text, tmp_path)
+                else:
+                    success = _synth_edge(final_text, tmp_path)
+                # Cache short phrases for next time (greetings, yes boss, etc.)
+                if success and len(final_text) <= 120 and provider != "elevenlabs":
+                    try:
+                        import shutil as _sh
+                        _sh.copyfile(tmp_path, cached)
+                    except Exception:
+                        pass
 
             if not success:
                 return
 
-            # Play audio via ffplay
+            # Play audio via ffplay (-probesize tiny = faster start)
             with _proc_lock:
                 _current_proc = subprocess.Popen(
-                    ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", tmp_path],
+                    [
+                        "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet",
+                        "-probesize", "32", "-analyzeduration", "0",
+                        play_path,
+                    ],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )

@@ -1,0 +1,335 @@
+"""agent/wake_word.py — Hey Jarvis (openwakeword) + fuzzy Hey Meera"""
+from __future__ import annotations
+
+import os, re, contextlib, threading, time
+from pathlib import Path
+from typing import Callable, Optional
+
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
+_ww_available = None
+
+# Whisper mishears we accept as wake
+WAKE_REGEX = [
+    r"\bhey\s*meera\b", r"\bhi\s*meera\b", r"\bmeera\b",
+    r"\bhey\s*mira\b", r"\bhey\s*mera\b", r"\bhey\s*mita\b", r"\bhi\s*mita\b",
+    r"\bhey\s*meet\b", r"\bhey\s*meet\s*up\b", r"\bhey\s*mahi\b",
+    r"\bhamira\b", r"\bamira\b",
+    r"\bhey\s*jarvis\b", r"\bjarvis\b",
+    r"\bhey\s*jeff\b", r"\bhey\s*jeffs\b", r"\bjeff\b",  # tiny hears jarvis→jeff
+    r"\balexa\b", r"\bhey\s*alexa\b",
+]
+FUZZY = {
+    "meera","mira","mera","mita","mahi","hamira","amira","meet","meta","meer",
+    "jarvis","jeff","jeffs","jarvis","jervis","jarv",
+}
+HEY = {"hey","hi","hello","yo","ok","okay","hay"}
+
+
+def is_available() -> bool:
+    global _ww_available
+    if _ww_available is not None:
+        return _ww_available
+    try:
+        import sounddevice, numpy  # noqa
+        _ww_available = True
+    except ImportError:
+        _ww_available = False
+    return _ww_available
+
+
+def get_custom_model_dir() -> Path:
+    d = Path.home() / ".oblivion" / "models"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def find_custom_models() -> dict:
+    out = {}
+    for d in [get_custom_model_dir(), Path(__file__).parent.parent / "assets"]:
+        if d.exists():
+            for p in d.glob("*.onnx"):
+                out[p.stem.lower().replace("_v0.1","").replace("_v1","")] = p
+    return out
+
+
+def list_available_wake_words() -> list:
+    names = {"hey_meera","hey_jarvis","alexa","hey_mycroft"}
+    names.update(find_custom_models().keys())
+    try:
+        import openwakeword
+        for p in openwakeword.get_pretrained_model_paths():
+            n = os.path.basename(p).replace(".onnx","")
+            if "_v" in n: n = n.rsplit("_v",1)[0]
+            names.add(n)
+    except Exception:
+        pass
+    return sorted(names)
+
+
+def _norm(t: str) -> str:
+    t = re.sub(r"[^a-z0-9\s]", " ", (t or "").lower())
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def transcript_is_wake(text: str) -> bool:
+    t = _norm(text)
+    if len(t) < 3:
+        return False
+    for pat in WAKE_REGEX:
+        if re.search(pat, t):
+            return True
+    toks = set(t.split())
+    if toks & FUZZY:
+        return True
+    has_hey = bool(toks & HEY) or t.startswith("hey") or t.startswith("hi ")
+    if has_hey and re.search(r"\b(meet|mita|mira|mera|mahi|hamira|amira|jeff|jarvis|jervis|up|heads)\b", t):
+        return True
+    c = t.replace(" ", "")
+    for n in ("heymeera","heymira","heymita","heymeet","heyjarvis","heyjeff","heymera","himeera"):
+        if n in c:
+            return True
+    return False
+
+
+class WakeWordDetector:
+    def __init__(self, on_wake, on_error=None, wake_words=None, sensitivity=None):
+        self.on_wake = on_wake
+        self.on_error = on_error
+        self.wake_words = wake_words or [os.getenv("WAKE_WORD_MODEL","hey_meera").strip() or "hey_meera"]
+        self.sensitivity = float(sensitivity if sensitivity is not None else os.getenv("WAKE_WORD_SENSITIVITY","0.25"))
+        self.listening = False
+        self._thread = None
+        self._stop = threading.Event()
+        self._oww = None
+        self._whisper = None
+        self._engine = os.getenv("WAKE_WORD_ENGINE","hybrid").strip().lower() or "hybrid"
+
+    def _err(self, m):
+        if self.on_error:
+            try: self.on_error(m)
+            except Exception: pass
+
+    def _load_oww(self) -> bool:
+        try:
+            import openwakeword
+            from openwakeword.model import Model
+
+            pre = list(openwakeword.get_pretrained_model_paths())
+            custom = find_custom_models()
+            paths = []
+
+            for k in ("hey_meera","meera"):
+                if k in custom:
+                    paths.append(str(custom[k]))
+
+            # CRITICAL: hey_jarvis pretrained (no extra kwargs — API-safe)
+            for p in pre:
+                if "hey_jarvis" in os.path.basename(p).lower():
+                    paths.append(p)
+                    break
+            else:
+                # fallback any pretrained
+                if pre:
+                    paths.append(pre[0])
+
+            if not paths:
+                return False
+
+            seen, uniq = set(), []
+            for p in paths:
+                if p not in seen:
+                    seen.add(p); uniq.append(p)
+
+            # OLD API: only wakeword_model_paths — DO NOT pass inference_framework
+            self._oww = Model(wakeword_model_paths=uniq)
+            return True
+        except Exception as e:
+            self._err(f"oww load: {e}")
+            return False
+
+    def _load_whisper(self) -> bool:
+        try:
+            from faster_whisper import WhisperModel
+            size = os.getenv("WAKE_WHISPER_MODEL","tiny.en")
+            with open(os.devnull,"w") as d, contextlib.redirect_stderr(d), contextlib.redirect_stdout(d):
+                try:
+                    os.environ["HF_HUB_OFFLINE"] = "1"
+                    self._whisper = WhisperModel(size, device="cpu", compute_type="int8")
+                except Exception:
+                    os.environ.pop("HF_HUB_OFFLINE", None)
+                    self._whisper = WhisperModel("tiny.en", device="cpu", compute_type="int8")
+            return True
+        except Exception as e:
+            self._err(f"whisper load: {e}")
+            return False
+
+    def _lazy_load(self) -> bool:
+        ok = False
+        if self._engine in ("hybrid","openwakeword","oww","jarvis"):
+            ok = self._load_oww() or ok
+        if self._engine in ("hybrid","whisper","meera"):
+            ok = self._load_whisper() or ok
+        return ok or self._load_oww()
+
+    def start(self) -> bool:
+        if self.listening: return True
+        if not is_available():
+            self._err("sounddevice missing"); return False
+        if not self._lazy_load():
+            self._err("no engine"); return False
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, name="wake-word", daemon=True)
+        self.listening = True
+        self._thread.start()
+        return True
+
+    def stop(self) -> None:
+        self._stop.set() if hasattr(self, "_stop") else None
+        if hasattr(self, "_stop_flag"):
+            try:
+                self._stop_flag.set()
+            except Exception:
+                pass
+        self.listening = False
+        if getattr(self, "_thread", None):
+            try:
+                self._thread.join(timeout=2.5)
+            except Exception:
+                pass
+        self._thread = None
+        # Drop model refs so PortAudio can release
+        self._oww = None
+        self._whisper = None
+        try:
+            import sounddevice as sd
+            sd.stop()
+        except Exception:
+            pass
+
+
+    def _fire(self, last, reason=""):
+        now = time.time()
+        if now - last[0] < 2.0: return
+        last[0] = now
+        if os.getenv("WAKE_DEBUG","").lower() in ("1","true","yes") and reason:
+            self._err(f"FIRE {reason}")
+        try: self.on_wake()
+        except Exception as e: self._err(f"on_wake: {e}")
+
+    def _loop(self):
+        import sounddevice as sd
+        import numpy as np
+
+        SR, CHUNK = 16000, 1280
+        last = [0.0]
+        roll = np.zeros(0, dtype=np.int16)
+        roll_max = SR * 2
+        last_w = 0.0
+        last_dbg = 0.0
+        interval = float(os.getenv("WAKE_WHISPER_INTERVAL","0.7"))
+        gate = float(os.getenv("WAKE_ENERGY_GATE","400"))
+        debug = os.getenv("WAKE_DEBUG","").lower() in ("1","true","yes")
+        thr = self.sensitivity
+
+        try:
+            stream = sd.InputStream(samplerate=SR, channels=1, dtype="int16", blocksize=CHUNK)
+            stream.start()
+            if debug:
+                self._err(f"mic | oww={self._oww is not None} wh={self._whisper is not None} thr={thr}")
+
+            while not self._stop.is_set():
+                try:
+                    data, ovf = stream.read(CHUNK)
+                    if ovf: continue
+                    pcm = np.asarray(data).flatten().astype(np.int16)
+
+                    # Primary: openwakeword
+                    if self._oww is not None:
+                        pred = self._oww.predict(pcm)
+                        if pred:
+                            bw, bs = max(pred.items(), key=lambda x: x[1])
+                            if debug and time.time()-last_dbg > 1.0 and bs > 0.05:
+                                last_dbg = time.time()
+                                self._err(f"oww {bw}={bs:.3f}")
+                            if bs >= thr:
+                                self._fire(last, f"oww {bw}={bs:.2f}")
+                                continue
+
+                    # Secondary: whisper fuzzy
+                    if self._whisper is not None:
+                        roll = np.concatenate([roll, pcm])
+                        if len(roll) > roll_max:
+                            roll = roll[-roll_max:]
+                        energy = float(np.mean(np.abs(pcm.astype(np.float32))))
+                        now = time.time()
+                        if energy >= gate and (now - last_w) >= interval:
+                            last_w = now
+                            audio = (roll.astype(np.float32)/32768.0).copy()
+                            try:
+                                segs,_ = self._whisper.transcribe(
+                                    audio, language="en", beam_size=1, best_of=1,
+                                    vad_filter=False, condition_on_previous_text=False,
+                                )
+                                text = " ".join(s.text for s in segs).strip()
+                                if debug and text:
+                                    self._err(f"w: {text!r}")
+                                if transcript_is_wake(text):
+                                    self._fire(last, f"wh {text!r}")
+                                    roll = np.zeros(0, dtype=np.int16)
+                            except Exception as e:
+                                if debug: self._err(f"werr: {e}")
+                except Exception as e:
+                    if not self._stop.is_set():
+                        self._err(f"loop: {e}")
+                        time.sleep(0.25)
+            stream.stop(); stream.close()
+        except Exception as e:
+            self._err(f"fatal: {e}")
+            self.listening = False
+
+
+_global = None
+
+def enable_wake_word(on_wake, on_error=None) -> bool:
+    global _global
+    if _global and _global.listening: return True
+    _global = WakeWordDetector(on_wake, on_error)
+    return _global.start()
+
+def disable_wake_word():
+    global _global
+    if _global:
+        try:
+            _global.stop()
+        except Exception:
+            pass
+        _global = None
+    try:
+        import sounddevice as sd
+        sd.stop()
+    except Exception:
+        pass
+
+
+def is_wake_word_enabled() -> bool:
+    return _global is not None and _global.listening
+
+def get_status() -> dict:
+    if not is_available():
+        return {"available": False, "reason": "sounddevice missing"}
+    return {
+        "available": True,
+        "listening": is_wake_word_enabled(),
+        "sensitivity": float(os.getenv("WAKE_WORD_SENSITIVITY","0.25")),
+        "active_model": os.getenv("WAKE_WORD_MODEL","hey_meera"),
+        "engine": getattr(_global,"_engine","hybrid") if _global else "hybrid",
+        "wake_words": _global.wake_words if _global else ["hey_meera"],
+        "available_models": list_available_wake_words(),
+        "custom_models_dir": str(get_custom_model_dir()),
+        "hint": "Say 'Hey Jarvis' or 'Hey Meera'",
+        "oww": bool(getattr(_global,"_oww",None)) if _global else False,
+        "whisper": bool(getattr(_global,"_whisper",None)) if _global else False,
+    }

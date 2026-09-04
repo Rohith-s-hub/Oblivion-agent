@@ -70,6 +70,10 @@ ACCENT_COLORS = ["#7b8cde", "#9aa0b8", "#3e4560", "#febc2e"]
 
 SLASH_COMMANDS = [
     ("/help",         "Show all slash commands"),
+    ("/continue",     "Resume task from where you left off"),
+    ("/models",       "Show all available models & status"),
+    ("/model",        "List or switch LLM model"),
+    ("/model reset",  "Clear exhausted-models cache (retry all)"),
     ("/clear",        "Clear chat history"),
     ("/index",        "Re-index changed files (incremental)"),
     ("/index status", "Show current chunk count"),
@@ -91,7 +95,7 @@ SLASH_COMMANDS = [
     ("/meera persona natasha",  "Natasha - Australian energetic"),
     ("/meera persona emma",     "Emma - warm storyteller"),
     ("/meera persona michelle", "Michelle - mature professional"),
-    ("/meera name boss",        "Change how FRIDAY addresses you"),
+    ("/meera name boss",        "Change how Meera addresses you"),
     ("/meera rate +20%",        "Speech rate (+/- percent)"),
     ("/workspace",    "Show / set workspace directory"),
     ("/newproject <name>",      "Create ~/Projects/<name>/ and switch into it"),
@@ -102,7 +106,7 @@ SLASH_COMMANDS = [
 ]
 
 # Auto-append every model from the registry so the dropdown always shows ALL options.
-# Add this AFTER initial SLASH_COMMANDS list above.
+_REG = MODELS
 try:
     _model_entries = []
     for _name, _info in _REG.items():
@@ -115,8 +119,10 @@ except Exception:
     SLASH_COMMANDS_MODEL_APPEND = []
 
 # Re-extend the main list with the dynamic model entries
-SLASH_COMMANDS = SLASH_COMMANDS[:0] + [
+SLASH_COMMANDS = [
     ("/help",         "Show all slash commands"),
+    ("/continue",     "Resume task from where you left off"),
+    ("/models",       "Show all available models & status"),
     ("/clear",        "Clear chat history"),
     ("/index",        "Re-index changed files (incremental)"),
     ("/index status", "Show current chunk count"),
@@ -827,8 +833,15 @@ class OblivionApp(App):
         # Background Whisper warm-up (non-blocking)
         def _bg_warmup_whisper():
             try:
-                from agent.voice import get_whisper_model
-                get_whisper_model()
+                from agent.voice import get_whisper_model, clear_model
+                from pathlib import Path as _P
+                if (_P.home() / ".oblivion" / ".whisper_force_reload").exists():
+                    clear_model()
+                    try:
+                        (_P.home() / ".oblivion" / ".whisper_force_reload").unlink()
+                    except Exception:
+                        pass
+                get_whisper_model()  # loads VOICE_MODEL=tiny.en from env
             except Exception:
                 pass
         import threading
@@ -859,7 +872,7 @@ class OblivionApp(App):
         # Boot messages
         for msg, delay in render_boot_sequence():
             log.write(msg)
-            await asyncio.sleep(delay)
+            await asyncio.sleep(min(float(delay) * 0.35, 0.12))
 
         log.write("")
 
@@ -873,17 +886,25 @@ class OblivionApp(App):
 
         for line in lines_to_write:
             log.write(line)
-            await asyncio.sleep(0.04)
+            await asyncio.sleep(0.01)
 
         log.write("")
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.08)
 
-        # System info panel
-        # M.E.E.R.A. greeting
+        # M.E.E.R.A. greeting — short + cached + never blocks UI
         if friday.is_enabled():
             try:
-                greeting = f"Good to see you, {friday.get_name()}. M.E.E.R.A. online and ready."
-                friday.speak(greeting)
+                import threading as _tg
+                def _boot_voice():
+                    try:
+                        # Warm common phrases once (instant later)
+                        if hasattr(friday, "warmup_tts"):
+                            friday.warmup_tts()
+                        greeting = f"Good to see you, {friday.get_name()}. M.E.E.R.A. online."
+                        friday.speak(greeting, blocking=False, auto_summarize=False)
+                    except Exception:
+                        pass
+                _tg.Thread(target=_boot_voice, name="meera-boot-voice", daemon=True).start()
             except Exception:
                 pass
 
@@ -1251,6 +1272,7 @@ class OblivionApp(App):
                 lines.append(f"[bold]Listening:[/bold]    " +
                              ("[green]● YES[/green]" if st["listening"] else "[dim]○ no[/dim]"))
                 lines.append(f"[bold]Wake words:[/bold]  {', '.join(st['wake_words'])}")
+                lines.append(f"[bold]Engine:[/bold]      {st.get('engine', '?')}  [dim]{st.get('hint','')}[/dim]")
                 lines.append(f"[bold]Sensitivity:[/bold] {st['sensitivity']}")
                 lines.append("")
                 lines.append(f"[dim]Available models: {', '.join(st['available_models'])}[/dim]")
@@ -1620,7 +1642,7 @@ class OblivionApp(App):
             ))
             return True
 
-        if command == "/model":
+        if command in ("/model", "/models"):
             # Quick subcommand: clear the exhausted-models cache
             if arg.strip().lower() in ("reset", "reset-exhausted", "clear-exhausted"):
                 try:
@@ -2685,7 +2707,7 @@ class OblivionApp(App):
         self.run_worker(self.handle_slash("/help"), exclusive=False)
 
     def _start_wake_word(self) -> bool:
-        """Start background wake word listener ("hey Jarvis" → record)."""
+        """Start background wake word listener ("Hey Meera" → record)."""
         try:
             from agent.wake_word import enable_wake_word, is_available
         except ImportError:
@@ -2700,7 +2722,7 @@ class OblivionApp(App):
             return False
 
         def _on_wake_from_thread():
-            """Called from wake word thread when "hey Jarvis" detected."""
+            """Called from wake word thread when "Hey Meera" detected."""
             def _trigger():
                 # Natural, conversational wake-word response
                 import random, time
@@ -2744,7 +2766,7 @@ class OblivionApp(App):
         if started:
             log = self.query_one("#chat-log", RichLog)
             log.write(
-                "[#67e8f9]🎤 Wake word active - say 'hey Jarvis' to talk[/#67e8f9]"
+                "[#67e8f9]🎤 Wake word active — say [bold]'Hey Meera'[/bold] to talk[/#67e8f9]"
             )
         return started
 
@@ -2757,6 +2779,43 @@ class OblivionApp(App):
             log.write("[#7c8399]🎤 Wake word disabled[/#7c8399]")
         except Exception:
             pass
+
+
+
+    def _pause_wake_for_record(self) -> bool:
+        self._wake_was_on_before_record = False
+        try:
+            from agent.wake_word import is_wake_word_enabled, disable_wake_word
+            self._wake_was_on_before_record = bool(is_wake_word_enabled())
+            disable_wake_word()
+        except Exception:
+            try:
+                from agent.wake_word import disable_wake_word
+                disable_wake_word()
+            except Exception:
+                pass
+        try:
+            import sounddevice as sd
+            sd.stop()
+        except Exception:
+            pass
+        import time as _t
+        _t.sleep(0.4)
+        return bool(getattr(self, "_wake_was_on_before_record", False))
+
+
+    def _resume_wake_after_record(self) -> None:
+        """Restart wake only if it was on before this recording."""
+        if not getattr(self, "_wake_was_on_before_record", False):
+            return
+        self._wake_was_on_before_record = False
+        try:
+            import time as _t
+            _t.sleep(0.4)
+            self._start_wake_word()
+        except Exception:
+            pass
+
 
     def action_toggle_voice(self) -> None:
         """Ctrl+T hotkey - start/stop voice recording."""
@@ -2775,10 +2834,19 @@ class OblivionApp(App):
             self.run_worker(self._start_voice_recording(), exclusive=False)
 
     async def _start_voice_recording(self):
-        """Begin recording audio. Uses pure threads to avoid Textual worker conflicts."""
+        """Ctrl+T / wake -> exclusive mic record -> fast STT."""
         log = self.query_one("#chat-log", RichLog)
 
-        # Start recording IMMEDIATELY (Whisper loads on transcription end)
+        if getattr(self, "voice_recording", False) or getattr(self, "_voice_busy", False):
+            log.write("[dim]Already listening...[/dim]")
+            return
+        self._voice_busy = True
+
+        try:
+            self._pause_wake_for_record()
+        except Exception:
+            pass
+
         self.voice_recording = True
         self.voice_status = "recording"
         self.voice_stop_event = threading.Event()
@@ -2798,47 +2866,72 @@ class OblivionApp(App):
         def on_status(s):
             self.voice_status = s
 
-        # All recording + transcription in one background thread
-        # Whisper is already pre-loaded by main() before Textual starts
         def record_thread():
+            text = ""
             try:
+                from agent.voice import VoiceRecorder, transcribe
                 recorder = VoiceRecorder(on_level=on_level, on_status=on_status)
                 self.voice_recorder = recorder
 
-                # Watch for stop event (allows Ctrl+T manual stop)
                 def watch_stop():
-                    self.voice_stop_event.wait()
-                    recorder.stop()
+                    ev = self.voice_stop_event
+                    if ev is not None:
+                        ev.wait()
+                    try:
+                        recorder.stop()
+                    except Exception:
+                        pass
                 threading.Thread(target=watch_stop, daemon=True).start()
 
-                # Use record() with silence detection (auto-stops after silence)
-                # Users can still manually stop with Ctrl+T
                 audio = recorder.record()
 
-                if len(audio) == 0:
-                    self.call_from_thread(self._apply_transcription, "")
-                    return
+                def _mark_tx():
+                    self.voice_recording = False
+                    self.current_status = "TRANSCRIBING"
+                    try:
+                        self.update_status()
+                    except Exception:
+                        pass
+                    try:
+                        self.query_one("#chat-log", RichLog).write(
+                            "[#9aa0b8]>>> Transcribing audio... <<<[/#9aa0b8]"
+                        )
+                    except Exception:
+                        pass
+                try:
+                    self.call_from_thread(_mark_tx)
+                except Exception:
+                    pass
 
-                self.voice_status = "transcribing"
-                text = transcribe(audio)
-                self.call_from_thread(self._apply_transcription, text)
+                if audio is not None and len(audio) > 0:
+                    text = transcribe(audio) or ""
+                else:
+                    st = str(getattr(self, "voice_status", "") or "")
+                    if st.startswith("error:"):
+                        text = "__ERROR__:" + st[6:].strip()
+                    else:
+                        text = ""
             except Exception as e:
-                self.call_from_thread(
-                    self._apply_transcription, f"__ERROR__:{e}"
-                )
+                text = "__ERROR__:" + str(e)
 
-        threading.Thread(target=record_thread, daemon=True).start()
+            try:
+                self.call_from_thread(self._apply_transcription, text)
+            except Exception:
+                self._voice_busy = False
+                self.voice_recording = False
+
+        threading.Thread(target=record_thread, daemon=True, name="voice-record").start()
 
     def _stop_voice_recording(self):
-        """Stop the current recording (called by F2 while recording)."""
+        """Stop the current recording (Ctrl+T while recording)."""
         if self.voice_stop_event is not None:
             self.voice_stop_event.set()
-        self.voice_recording = False
-        self.current_status = "TRANSCRIBING"
-        self.update_status()
-
-        log = self.query_one("#chat-log", RichLog)
-        log.write("[#9aa0b8]>>> Transcribing audio... <<<[/#9aa0b8]")
+        try:
+            if getattr(self, "voice_recorder", None) is not None:
+                self.voice_recorder.stop()
+        except Exception:
+            pass
+        # UI status flip happens in record_thread when record() returns
 
     def _on_voice_done(self, text: str):
         """Called when transcription completes. Fills input box."""
@@ -2867,14 +2960,20 @@ class OblivionApp(App):
         input_widget = self.query_one("#input-box", Input)
 
         self.voice_recording = False
+        self._voice_busy = False
         self.voice_recorder = None
         self.current_status = "READY"
         self.update_status()
+        try:
+            self._resume_wake_after_record()
+        except Exception:
+            pass
 
         if text.startswith("__ERROR__:"):
-            err = text[len("__ERROR__:"):]
+            err = text[len("__ERROR__:"):].strip()
             log.write(Panel(
-                f"[#febc2e]Voice error: {err}[/#febc2e]",
+                f"[#febc2e]Voice error: {err}[/#febc2e]\n"
+                f"[dim]Tip: /wake off then Ctrl+T[/dim]",
                 border_style="#febc2e",
             ))
             return

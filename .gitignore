@@ -91,3 +91,12 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+.env.*
+*.env
+config.env
+.oblivion/
+tts_cache/
+*.onnx
+.whisper*
+agent/*.bak*
+ui/*.bak*
