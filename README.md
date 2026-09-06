@@ -208,3 +208,13 @@ Creator of **Oblivion AI** (M.E.E.R.A.) — open-source terminal AI coding agent
 pip install oblivion-agent
 oblivion
 ```
+
+## Author & Creator
+**Rohith R** — AI Integrated Fullstack Developer & B.Sc. CS Student (Sivakasi, India)  
+Creator of **Oblivion AI** (`pip install oblivion-agent`)
+
+- 🌐 Blog / Portfolio: [https://rohith.run.place/](https://rohith.run.place/)
+- 💼 LinkedIn: [https://www.linkedin.com/in/rohith-rajkumar-040676315/](https://www.linkedin.com/in/rohith-rajkumar-040676315/)
+- 💻 GitHub: [https://github.com/Rohith-s-hub/](https://github.com/Rohith-s-hub/)
+- 📦 PyPI: [https://pypi.org/project/oblivion-agent/](https://pypi.org/project/oblivion-agent/)
+- ⚡ Web: [https://oblivion.run.place/](https://oblivion.run.place/)
