@@ -362,7 +362,7 @@ class ActivityItem(Static):
         return SPINNER_FRAMES[ActivityItem._frame_idx]
 
     def update_display(self):
-        icons  = {"running": self._spinner_frame(), "done": "●", "error": "✗", "pending": "◐"}
+        icons  = {"running": self._spinner_frame(), "done": "✓", "error": "✕", "pending": "◌"}
         colors = {"running": "yellow", "done": "green", "error": "red", "pending": "magenta"}
         icon = icons.get(self.status, "·")
         color = colors.get(self.status, "white")
@@ -632,7 +632,7 @@ class OblivionApp(App):
                     yield VerticalScroll(id="activity-scroll")
 
                 with Vertical(id="workspace-panel"):
-                    yield Label("[bold #a78bfa]📁 FILES[/bold #a78bfa]")
+                    yield Label("[bold #a78bfa]📂 FILES[/bold #a78bfa]")
                     yield Tree("◆ root/", id="workspace-tree")
 
         yield Input(placeholder="❯ Enter command, /help, or Ctrl+T to talk…", id="input-box")
@@ -689,7 +689,7 @@ class OblivionApp(App):
             state_seg = f"{auto_badge}[bold #09090b on #10b981] ⚡ READY [/]"
 
         model_seg = f"[bold #e0e7ff on #27272a] 🤖 {model_display} [/]"
-        ws_seg = f"[bold #67e8f9 on #181820] 📁 {workspace} [/]"
+        ws_seg = f"[bold #67e8f9 on #181820] 📂 {workspace} [/]"
         stats_seg = f"[#a1a1aa on #09090b] msg:{msgs} │ tok:{tok_str} │ step:{self.iteration_count} [/]"
         hint_seg = f"[dim #71717a on #09090b] ^Q quit │ ^H help [/]"
 
@@ -938,7 +938,7 @@ class OblivionApp(App):
         wake_status = "Active ('Hey Meera')" if os.getenv("WAKE_WORD_ENABLED", "false").lower() == "true" else "Standby (press Ctrl+T or /wake on)"
 
         welcome_content = (
-            f"[#e0e7ff]Welcome back, [bold #67e8f9]{_user_name}[/bold #67e8f9] 👋[/#e0e7ff]\n\n"
+            f"[#e0e7ff]Welcome back, [bold #67e8f9]{_user_name}[/bold #67e8f9][/#e0e7ff]\n\n"
             f"[#a78bfa]AI Persona:[/#a78bfa]  [bold #67e8f9]M.E.E.R.A.[/bold #67e8f9] [dim](Engineering & Reasoning Assistant)[/dim]\n"
             f"[#a78bfa]LLM Model:[/#a78bfa]   [#e0e7ff]{_model_short}[/#e0e7ff]\n"
             f"[#a78bfa]Workspace:[/#a78bfa]   [#67e8f9]{_workspace_display}[/#67e8f9]\n"
@@ -1096,7 +1096,7 @@ class OblivionApp(App):
             import os as _os
             ws_path = Path(_os.environ.get("WORKSPACE_DIR", ".")).expanduser().resolve()
             ws_name = ws_path.name or str(ws_path)
-            root.label = f"◆ {ws_name}/"
+            root.label = f"📂 {ws_name}/"
         except Exception:
             pass
 
@@ -1131,10 +1131,10 @@ class OblivionApp(App):
                     if item.name.startswith(".") or item.name in skip:
                         continue
                     if item.is_dir():
-                        node = parent_node.add(f"◆ {item.name}/")
+                        node = parent_node.add(f"▾ {item.name}/")
                         add_path(node, item, depth + 1)
                     else:
-                        parent_node.add_leaf(f"◇ {item.name}")
+                        parent_node.add_leaf(f"  📄 {item.name}")
             except PermissionError:
                 pass
 
@@ -2379,10 +2379,10 @@ class OblivionApp(App):
                 if tool_name == "write_file":
                     _p = args.get("path", "?")
                     _sz = len(args.get("content", ""))
-                    log.write(f"[dim #a78bfa]✎[/dim #a78bfa] [#e0e7ff]Writing [bold]{_p}[/bold] [dim]({_sz} chars)[/dim]...[/#e0e7ff]")
+                    log.write(f"[bold #7b8cde]✦[/bold #7b8cde] [#e0e7ff]Writing [bold]{_p}[/bold] [dim]({_sz} chars)[/dim]...[/#e0e7ff]")
                 elif tool_name == "batch_edit":
                     _edits = args.get("edits", [])
-                    log.write(f"[dim #a78bfa]✎[/dim #a78bfa] [#e0e7ff]Writing [bold]{len(_edits)} files[/bold] in batch...[/#e0e7ff]")
+                    log.write(f"[bold #7b8cde]✦[/bold #7b8cde] [#e0e7ff]Writing [bold]{len(_edits)} files[/bold] in batch...[/#e0e7ff]")
                     for _e in _edits[:12]:
                         if isinstance(_e, dict):
                             _pp = _e.get("path", "?")
@@ -2391,7 +2391,7 @@ class OblivionApp(App):
                             log.write(f"[dim #7c8399]   → {_pp}[/dim #7c8399] [dim]({_sz2} chars)[/dim]")
                 elif tool_name == "edit_file":
                     _p = args.get("path", "?")
-                    log.write(f"[dim #a78bfa]✎[/dim #a78bfa] [#e0e7ff]Editing [bold]{_p}[/bold]...[/#e0e7ff]")
+                    log.write(f"[bold #7b8cde]✦[/bold #7b8cde] [#e0e7ff]Editing [bold]{_p}[/bold]...[/#e0e7ff]")
                 elif tool_name == "run_bash":
                     _cmd = args.get("command", "?")[:60]
                     log.write(f"[dim #67e8f9]▸[/dim #67e8f9] [#e0e7ff]Running:[/#e0e7ff] [dim]{_cmd}[/dim]")

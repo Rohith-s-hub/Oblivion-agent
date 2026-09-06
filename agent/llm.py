@@ -18,32 +18,9 @@ litellm.drop_params = True
 # ── Fallback config ─────────────────────────────────────────────────────────
 # Order: primary (whatever DEFAULT_MODEL is) → these in sequence
 FALLBACK_CHAIN = [
-    # ═══ TIER 1: PROVEN FREE PRIMARY ═══════════════════════════════════
-    # Only remaining FREE Ollama Cloud model (verified Aug 2026)
-    # 32.7B params, 256K ctx, vision+tools, no rate limits
-    "ollama/gemma4:31b-cloud",           # ⭐ THE WINNER
-
-    # ═══ TIER 2: FAST FREE CLOUD APIs ══════════════════════════════════
-    # Free tiers with generous per-minute limits
-    "gemini/gemini-2.5-flash",           # 1M ctx, 250/day
-    "groq/llama-3.3-70b-versatile",      # 30 RPM, blazing fast
-
-    # ═══ TIER 3: OPENROUTER FREE ═══════════════════════════════════════
-    # Backup free cloud when others rate-limited
-    "openrouter/google/gemma-4-31b-it:free",
-    "openrouter/openai/gpt-oss-20b:free",
-
-    # ═══ TIER 4: LOCAL SAFETY NET ══════════════════════════════════════
-    # Always works, no internet needed
+    "groq/openai/gpt-oss-120b",
+    "gemini/gemini-2.5-flash",
     "ollama/qwen3.5:4b",
-
-    # ═══ REMOVED (verified dead/paid Aug 2026) ═════════════════════════
-    # - ollama/qwen3-coder:480b-cloud    RETIRED 2026-07-15
-    # - ollama/qwen3.5:397b-cloud        PAID subscription required
-    # - ollama/glm-5.2:cloud              PAID subscription required
-    # - groq/openai/gpt-oss-120b          8K TPM too small
-    # - cerebras/*                        needs paid API key
-    # - nvidia/nemotron-3-ultra           too slow, unreliable
 ]
 
 # How long to keep a model "exhausted" before retrying (seconds)

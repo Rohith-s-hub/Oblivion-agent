@@ -199,7 +199,7 @@ Oblivion AI is designed and built by **R. Rohith** ([@Rohith-s-hub](https://gith
 Creator of **Oblivion AI** (M.E.E.R.A.) — open-source terminal AI coding agent.
 
 - LinkedIn: https://www.linkedin.com/in/rohith-rajkumar-040676315/
-- Blog: https://rohithblog.vercel.app/
+- Blog: https://rohith.run.place/
 - GitHub: https://github.com/Rohith-s-hub/
 - PyPI: https://pypi.org/project/oblivion-agent/
 - Site: https://oblivion.run.place/
