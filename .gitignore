@@ -101,3 +101,4 @@ tts_cache/
 agent/*.bak*
 ui/*.bak*
 "$x"
+cloudflared

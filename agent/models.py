@@ -76,6 +76,16 @@ MODELS = {
         "context_window": 200_000,
         "rate_limit_delay": 0.0,
     },
+    "gpt-6-astra": {
+        "id": "openai/gpt-6-astra",
+        "provider": "openai",
+        "speed": "medium",
+        "cost": "Paid ($10/$50 per 1M)",
+        "description": "OpenAI GPT-6 Astra Flagship",
+        "color": "#10a37f",
+        "api_key_env": "OPENAI_API_KEY",
+        "context_window": 1_050_000,
+    },
     "gpt-4o": {
         "id": "openai/gpt-4o",
         "provider": "openai",

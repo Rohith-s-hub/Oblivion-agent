@@ -1,169 +1,105 @@
 """
-mcp_server/server.py — Expose Oblivion's tools via Model Context Protocol.
-
-Lets external clients (Claude Desktop, Cursor, Zed, etc.) use Oblivion's
-code understanding without launching the TUI. Runs over stdio.
-
-Exposed tools (READ-ONLY for safety in v1):
-  - read_file           — read any file in workspace
-  - list_dir            — list directory contents
-  - grep_files          — exact-text search
-  - file_exists         — check existence
-  - search_code         — hybrid semantic + symbol search
-  - find_symbol         — exact function/class lookup
-  - list_symbols        — outline a file
-  - find_callers        — references to a symbol
-  - project_map         — workspace tree
-  - recall              — read workspace memory
-
-Workspace is set via WORKSPACE_DIR env var, passed by the client.
-
-Usage:
-  Direct test:        oblivion mcp
-  Claude Desktop:     see https://modelcontextprotocol.io/quickstart/user
+mcp_server/server.py — Main CLI Entry point for Oblivion MCP Server.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
 import sys
-from typing import Any
 
-# Load Oblivion config so paths + workspace work the same as in TUI
-from agent.paths import load_config_env, load_last_workspace
-load_config_env()
-
-# If WORKSPACE_DIR not explicitly set by client (Claude Desktop passes it),
-# fall back to the last workspace user was in via TUI
-import os as _osw
-if not _osw.environ.get("WORKSPACE_DIR"):
-    _last = load_last_workspace()
-    if _last:
-        _osw.environ["WORKSPACE_DIR"] = _last
-        print(f"[oblivion-mcp] restored workspace: {_last}", file=__import__("sys").stderr)
+from mcp_server.auth import get_or_create_token
+from mcp_server.transports.stdio import run_stdio
+from mcp_server.transports.sse import run_sse
 
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
-
-from tools.registry import TOOL_FUNCTIONS, TOOL_SCHEMAS
-
-
-# ── Safety: only expose read-only tools in v1 ────────────────────────────────
-SAFE_TOOLS = {
-    "read_file",
-    "list_dir",
-    "grep_files",
-    "file_exists",
-    "search_code",
-    "find_symbol",
-    "list_symbols",
-    "find_callers",
-    "project_map",
-    "recall",
-}
-
-
-def _oblivion_schema_to_mcp(schema: dict) -> Tool:
-    """Convert one entry from Oblivion's TOOL_SCHEMAS to an MCP Tool object."""
-    properties = {}
-    required = []
-    for param_name, param_spec in schema.get("parameters", {}).items():
-        json_type = {
-            "string": "string",
-            "integer": "integer",
-            "boolean": "boolean",
-        }.get(param_spec.get("type", "string"), "string")
-        properties[param_name] = {
-            "type": json_type,
-            "description": param_spec.get("description", ""),
-        }
-        if param_spec.get("required"):
-            required.append(param_name)
-
-    return Tool(
-        name=schema["name"],
-        description=schema["description"],
-        inputSchema={
-            "type": "object",
-            "properties": properties,
-            "required": required,
-        },
+def parse_args(args: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="oblivion mcp",
+        description="Oblivion Model Context Protocol (MCP) server.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["stdio", "sse"],
+        default=None,
+        help="Transport mode (default: stdio, auto-switches to sse if --port/--sse is specified)",
+    )
+    parser.add_argument(
+        "--sse",
+        action="store_true",
+        help="Shorthand for --mode sse",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help="Bind host for SSE mode (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8767,
+        help="Port for SSE mode (default: 8767)",
+    )
+    parser.add_argument(
+        "--tier",
+        choices=["safe", "standard", "full"],
+        default="standard",
+        help="Tool permission tier: safe (read-only), standard (read+write), full (bash+git+tests)",
+    )
+    parser.add_argument(
+        "--workspace",
+        type=str,
+        default=None,
+        help="Target workspace folder (default: last used workspace or cwd)",
+    )
+    parser.add_argument(
+        "--token",
+        type=str,
+        default=None,
+        help="Bearer token for authentication (generated if omitted in SSE mode)",
+    )
+    parser.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="Disable bearer token authentication in SSE mode",
+    )
+    return parser.parse_args(args)
 
 
-# ── Build the server ─────────────────────────────────────────────────────────
-app = Server("oblivion")
+def main(custom_args: list[str] | None = None) -> None:
+    if custom_args is None:
+        custom_args = sys.argv[1:]
 
+    # If first arg is 'mcp', strip it
+    if custom_args and custom_args[0] == "mcp":
+        custom_args = custom_args[1:]
 
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    """Tell MCP clients which Oblivion tools are available."""
-    out = []
-    for schema in TOOL_SCHEMAS:
-        if schema["name"] in SAFE_TOOLS:
-            out.append(_oblivion_schema_to_mcp(schema))
-    return out
+    args = parse_args(custom_args)
 
-
-@app.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
-    """Execute a tool call from the MCP client."""
-    if name not in SAFE_TOOLS:
-        return [TextContent(
-            type="text",
-            text=f"Error: tool '{name}' is not exposed via MCP (read-only mode).",
-        )]
-
-    if name not in TOOL_FUNCTIONS:
-        return [TextContent(
-            type="text",
-            text=f"Error: unknown tool '{name}'.",
-        )]
+    # Resolve mode
+    mode = args.mode
+    if args.sse:
+        mode = "sse"
+    elif mode is None:
+        mode = "stdio"
 
     try:
-        # Run sync tool in thread pool so we don't block the event loop
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: TOOL_FUNCTIONS[name](**arguments),
-        )
-        return [TextContent(type="text", text=str(result))]
-    except TypeError as e:
-        return [TextContent(
-            type="text",
-            text=f"Error: bad arguments to {name}: {e}",
-        )]
-    except Exception as e:
-        return [TextContent(
-            type="text",
-            text=f"Error running {name}: {type(e).__name__}: {e}",
-        )]
-
-
-# ── Entry point ──────────────────────────────────────────────────────────────
-async def _run() -> None:
-    """Async runner — wires stdin/stdout to the MCP server."""
-    workspace = os.getenv("WORKSPACE_DIR", os.getcwd())
-    print(f"[oblivion-mcp] workspace = {workspace}", file=sys.stderr)
-    print(f"[oblivion-mcp] exposed tools = {len(SAFE_TOOLS)} (read-only)", file=sys.stderr)
-    print(f"[oblivion-mcp] ready - listening on stdio", file=sys.stderr)
-
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(
-            read_stream,
-            write_stream,
-            app.create_initialization_options(),
-        )
-
-
-def main() -> None:
-    """Sync entry point called by the `oblivion mcp` subcommand."""
-    try:
-        asyncio.run(_run())
+        if mode == "sse":
+            token = None
+            if not args.no_auth:
+                token = get_or_create_token(args.token)
+            run_sse(
+                host=args.host,
+                port=args.port,
+                tier=args.tier,
+                workspace=args.workspace,
+                token=token,
+            )
+        else:
+            asyncio.run(run_stdio(tier=args.tier, workspace=args.workspace))
     except KeyboardInterrupt:
-        print("\n[oblivion-mcp] shutdown", file=sys.stderr)
+        print("\n[oblivion-mcp] shutdown cleanly", file=sys.stderr)
 
 
 if __name__ == "__main__":

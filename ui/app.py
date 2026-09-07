@@ -97,6 +97,13 @@ SLASH_COMMANDS = [
     ("/meera persona michelle", "Michelle - mature professional"),
     ("/meera name boss",        "Change how Meera addresses you"),
     ("/meera rate +20%",        "Speech rate (+/- percent)"),
+    ("/mcp",                    "MCP Web Connector & status"),
+    ("/mcp share",              "⚡ Instant Claude.ai / Web Connector (HTTPS)"),
+    ("/mcp on",                 "Start local MCP SSE server"),
+    ("/mcp off",                "Stop MCP server and web tunnel"),
+    ("/mcp tier standard",       "Set tier: standard (safe + file edits)"),
+    ("/mcp tier full",           "Set tier: full (bash + git + tests)"),
+    ("/mcp tier safe",           "Set tier: safe (read-only mode)"),
     ("/workspace",    "Show / set workspace directory"),
     ("/newproject <name>",      "Create ~/Projects/<name>/ and switch into it"),
     ("/openproject <name>",     "Switch workspace to an existing project"),
@@ -146,6 +153,13 @@ SLASH_COMMANDS = [
     ("/meera persona michelle", "Michelle - mature professional"),
     ("/meera name boss",        "Change how Meera addresses you"),
     ("/meera rate +20%",        "Speech rate (+/- percent)"),
+    ("/mcp",                    "MCP Web Connector & status"),
+    ("/mcp share",              "⚡ Instant Claude.ai / Web Connector (HTTPS)"),
+    ("/mcp on",                 "Start local MCP SSE server"),
+    ("/mcp off",                "Stop MCP server and web tunnel"),
+    ("/mcp tier standard",       "Set tier: standard (safe + file edits)"),
+    ("/mcp tier full",           "Set tier: full (bash + git + tests)"),
+    ("/mcp tier safe",           "Set tier: safe (read-only mode)"),
     ("/workspace",    "Show / set workspace directory"),
     ("/newproject <name>",      "Create ~/Projects/<name>/ and switch into it"),
     ("/openproject <name>",     "Switch workspace to an existing project"),
@@ -1147,6 +1161,60 @@ class OblivionApp(App):
         parts = cmd.strip().split(maxsplit=1)
         command = parts[0].lower()
         arg = parts[1] if len(parts) > 1 else ""
+
+        if command == "/mcp":
+            from mcp_server.manager import get_mcp_status, start_server, start_tunnel, stop_all
+            from rich.panel import Panel
+            from rich.table import Table
+
+            sub = arg.strip().lower()
+
+            if sub in ("off", "stop"):
+                stop_all()
+                log.write(Panel("[#febc2e]⛔ Oblivion MCP Server and Web Connectors stopped.[/#febc2e]", title="[#7b8cde]MCP Manager[/#7b8cde]", border_style="#3e4560"))
+                return True
+
+            if sub.startswith("tier "):
+                new_tier = sub.split(maxsplit=1)[1].strip()
+                if new_tier not in ("safe", "standard", "full"):
+                    log.write("[#febc2e]Usage: /mcp tier safe | standard | full[/#febc2e]")
+                    return True
+                stop_all()
+                start_server(tier=new_tier)
+                log.write(f"[#67e8f9]✓ Tool tier switched to {new_tier.upper()}[/#67e8f9]")
+
+            if sub in ("share", "web", "connect"):
+                log.write("[#7b8cde]⚡ Initializing Oblivion Web Connector & HTTPS Tunnel...[/#7b8cde]")
+                st = await asyncio.to_thread(start_server)
+                tun_url = await asyncio.to_thread(start_tunnel, st["port"])
+            elif sub in ("on", "start"):
+                st = await asyncio.to_thread(start_server)
+            
+            # Render Status Card
+            st = get_mcp_status()
+            
+            t = Table.grid(padding=(0, 1))
+            t.add_column(style="bold #7b8cde", width=18)
+            t.add_column(style="#9aa0b8")
+
+            srv_badge = "[bold #67e8f9]● ACTIVE (ONLINE)[/bold #67e8f9]" if st["running"] else "[dim]○ STOPPED[/dim]"
+            t.add_row("Status:", srv_badge)
+            t.add_row("Tool Tier:", f"[#febc2e]{st['tier'].upper()}[/#febc2e] ({st['tools_count']} tools available)")
+            
+            if st["running"]:
+                t.add_row("Local SSE:", f"[#67e8f9]{st['local_sse_url']}[/#67e8f9]")
+                t.add_row("Auth Token:", f"[dim]{st['token']}[/dim]")
+
+            if st["tunnel_active"]:
+                t.add_row("Web Connector:", f"[bold #67e8f9]{st['web_connector_url']}[/bold #67e8f9]")
+                t.add_row("Claude.ai Setup:", "[dim]Add SSE Connector ➔ Paste Web Connector URL[/dim]")
+            elif st["running"]:
+                t.add_row("Web Tunnel:", "[dim]Not shared. Run [bold]/mcp share[/bold] to expose for claude.ai[/dim]")
+
+            card_body = t
+            title = "[bold #7b8cde]🌐 OBLIVION MCP & WEB CONNECTOR[/bold #7b8cde]"
+            log.write(Panel(card_body, title=title, border_style="#7b8cde", subtitle="[dim]/mcp share | /mcp on | /mcp off | /mcp tier[/dim]"))
+            return True
 
         if command == "/continue":
             log.write("[#9aa0b8]Resuming task with fresh iteration budget...[/#9aa0b8]")
@@ -3055,7 +3123,7 @@ def main():
             return
         if cmd == "mcp":
             from mcp_server.server import main as mcp_main
-            mcp_main()
+            mcp_main(argv[1:])
             return
         if cmd == "inspect":
             # Launch official MCP Inspector against our own server
