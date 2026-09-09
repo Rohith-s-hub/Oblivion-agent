@@ -72,6 +72,7 @@ SLASH_COMMANDS = [
     ("/help",         "Show all slash commands"),
     ("/continue",     "Resume task from where you left off"),
     ("/models",       "Show all available models & status"),
+    ("/addmodel",     "Add a new LLM model & API key: /addmodel <name> <id> [key]"),
     ("/model",        "List or switch LLM model"),
     ("/model reset",  "Clear exhausted-models cache (retry all)"),
     ("/clear",        "Clear chat history"),
@@ -1214,6 +1215,74 @@ class OblivionApp(App):
             card_body = t
             title = "[bold #7b8cde]🌐 OBLIVION MCP & WEB CONNECTOR[/bold #7b8cde]"
             log.write(Panel(card_body, title=title, border_style="#7b8cde", subtitle="[dim]/mcp share | /mcp on | /mcp off | /mcp tier[/dim]"))
+            return True
+
+        if command in ("/addmodel", "/add-model"):
+            from agent.models import MODELS, register_custom_model
+            from agent.paths import save_config_key
+            from rich.panel import Panel
+
+            parts = arg.strip().split()
+            if len(parts) < 2:
+                help_lines = [
+                    "[#febc2e]Usage: /addmodel <short_name> <litellm_model_id> [API_KEY_OR_ENV=KEY][/#febc2e]",
+                    "",
+                    "[dim]Examples:",
+                    "  /addmodel openrouter-claude openrouter/anthropic/claude-3.5-sonnet sk-or-v1-xxxx",
+                    "  /addmodel groq-llama groq/llama-3.3-70b-versatile gsk_xxxx",
+                    "  /addmodel qwen-local ollama/qwen2.5-coder:7b[/dim]"
+                ]
+                log.write(Panel("\n".join(help_lines), title="[#7b8cde]/addmodel Help[/#7b8cde]", border_style="#3e4560"))
+                return True
+
+            short_name = parts[0].lower().strip()
+            model_id = parts[1].strip()
+            raw_key_arg = parts[2].strip() if len(parts) > 2 else ""
+
+            env_key_name = ""
+            api_key_val = ""
+
+            if raw_key_arg:
+                if "=" in raw_key_arg:
+                    k_parts = raw_key_arg.split("=", 1)
+                    env_key_name = k_parts[0].upper().strip()
+                    api_key_val = k_parts[1].strip()
+                else:
+                    api_key_val = raw_key_arg
+                    if api_key_val.startswith("gsk_"):
+                        env_key_name = "GROQ_API_KEY"
+                    elif api_key_val.startswith("sk-or-"):
+                        env_key_name = "OPENROUTER_API_KEY"
+                    elif api_key_val.startswith("AIza"):
+                        env_key_name = "GEMINI_API_KEY"
+                    elif "deepseek" in model_id:
+                        env_key_name = "DEEPSEEK_API_KEY"
+                    elif "anthropic" in model_id or api_key_val.startswith("sk-ant-"):
+                        env_key_name = "ANTHROPIC_API_KEY"
+                    else:
+                        env_key_name = "OPENAI_API_KEY"
+
+            if env_key_name and api_key_val:
+                os.environ[env_key_name] = api_key_val
+                try:
+                    save_config_key(env_key_name, api_key_val)
+                except Exception:
+                    pass
+
+            provider = model_id.split("/")[0] if "/" in model_id else "ollama"
+            label = f"{short_name.capitalize()} ({provider})"
+            register_custom_model(short_name, model_id, label=label, provider=provider)
+
+            m_cmd = f"/model {short_name}"
+            if not any(c[0] == m_cmd for c in SLASH_COMMANDS):
+                SLASH_COMMANDS.append((m_cmd, f"Switch to {short_name} ({model_id})"))
+
+            out_lines = [f"[#67e8f9]✓ Registered model: [bold]{short_name}[/bold] ({model_id})[/#67e8f9]"]
+            if env_key_name:
+                out_lines.append(f"[dim]Saved key to {env_key_name}[/dim]")
+            out_lines.append(f"[#7b8cde]Switch now: [bold]/model {short_name}[/bold][/#7b8cde]")
+
+            log.write(Panel("\n".join(out_lines), title="[#7b8cde]Model Added[/#7b8cde]", border_style="#67e8f9"))
             return True
 
         if command == "/continue":
