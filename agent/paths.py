@@ -271,3 +271,19 @@ def load_last_workspace() -> str | None:
     except Exception:
         pass
     return None
+
+
+def save_config_key(key: str, value: str) -> None:
+    """Save or update a KEY=VALUE pair in ~/.oblivion/config.env."""
+    try:
+        cfg = config_env()
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        lines = []
+        if cfg.exists():
+            lines = cfg.read_text(encoding="utf-8").splitlines()
+        lines = [l for l in lines if not l.startswith(f"{key}=")]
+        lines.append(f"{key}={value}")
+        cfg.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.environ[key] = value
+    except Exception:
+        pass

@@ -186,3 +186,41 @@ def check_api_key(model_name: str) -> tuple[bool, str]:
 
 def list_models_table() -> list[dict]:
     return [{"name": name, **info} for name, info in MODELS.items()]
+
+
+# ── Custom Models Persistence ────────────────────────────────────────────────
+import json
+from pathlib import Path
+
+CUSTOM_MODELS_PATH = Path.home() / ".oblivion" / "custom_models.json"
+
+def load_custom_models() -> dict:
+    if CUSTOM_MODELS_PATH.exists():
+        try:
+            return json.loads(CUSTOM_MODELS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+def register_custom_model(short_name: str, model_id: str, label: str = "Custom Model", provider: str = "custom") -> dict:
+    customs = load_custom_models()
+    entry = {
+        "id": model_id,
+        "label": label,
+        "latency": "dynamic",
+        "notes": f"Added via /addmodel ({provider})",
+        "provider": provider,
+    }
+    customs[short_name] = entry
+    CUSTOM_MODELS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CUSTOM_MODELS_PATH.write_text(json.dumps(customs, indent=2), encoding="utf-8")
+    MODELS[short_name] = entry
+    return entry
+
+# Load custom models into MODELS registry at boot
+try:
+    _customs = load_custom_models()
+    for _k, _v in _customs.items():
+        MODELS[_k] = _v
+except Exception:
+    pass
