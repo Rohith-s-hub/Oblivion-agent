@@ -1,6 +1,6 @@
 [project]
 name = "oblivion-agent"
-version = "3.4.1"
+version = "3.4.2"
 description = "OBLIVION - Terminal AI coding agent with voice, RAG, and multi-model support. Powered by Meera."
 readme = "README.md"
 license = {text = "MIT"}
@@ -63,3 +63,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agent", "tools", "db", "ui", "knowledge", "mcp_server", "simulator"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/README.md", "/agent", "/tools", "/db", "/ui", "/knowledge", "/mcp_server", "/simulator"]
