@@ -153,6 +153,39 @@ def parse_llm_output(text: str):
             content = re.sub(r"^\s*ACTION\s*:.*?(?=\n\n|\Z)", "", content, flags=re.IGNORECASE | re.DOTALL).strip()
             return FinalAnswer(content=content)
 
+    # ── SMART RECOVERY: Auto-extract markdown code blocks for planned files ──
+    if not re.search(r"FINAL_ANSWER:", text, re.IGNORECASE):
+        code_block_match = re.search(
+            r"(?:file|path)?:?\s*[`'\"]*([a-zA-Z0-9_./\-]+\.[a-zA-Z0-9]+)[`'\"]*.*?\n```(?:[a-zA-Z0-9]+\n)?(.*?)```",
+            text, re.DOTALL | re.IGNORECASE
+        )
+        if not code_block_match:
+            code_block_match = re.search(r"```(?:[a-zA-Z0-9]+\n)?(.*?)```", text, re.DOTALL)
+
+        if code_block_match:
+            target_file = None
+            if code_block_match.lastindex and code_block_match.lastindex >= 2 and code_block_match.group(1):
+                potential = code_block_match.group(1).strip()
+                if "." in potential and not potential.startswith("http"):
+                    target_file = potential
+
+            if not target_file:
+                try:
+                    from agent.plan_guard import missing_files
+                    missing = missing_files()
+                    if missing:
+                        target_file = missing[0]
+                except Exception:
+                    pass
+
+            code_content = code_block_match.group(code_block_match.lastindex).strip() if code_block_match else ""
+            if target_file and code_content and len(code_content) > 5:
+                return ToolCall(
+                    tool="write_file",
+                    args={"path": target_file, "content": code_content},
+                    thought=thought or f"Auto-writing {target_file} from code block",
+                )
+
     # ── FALLBACK SCAN: Search entire text for any JSON with "tool" key ───────
     if not re.search(r"FINAL_ANSWER:", text, re.IGNORECASE):
         brace_pos = 0
