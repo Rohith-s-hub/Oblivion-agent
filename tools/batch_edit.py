@@ -1,7 +1,4 @@
-"""
-tools/batch_edit.py - Atomic multi-file editing tool for Oblivion AI.
-Applies edits to multiple files IMMEDIATELY to disk.
-"""
+"""Multi-file editing with all-input preflight (not crash-atomic)."""
 from __future__ import annotations
 
 import os
@@ -27,7 +24,10 @@ def _safe_path(rel_path: str) -> Path:
 
 def batch_edit(edits: list) -> str:
     """
-    Apply multiple file edits IMMEDIATELY to disk.
+    Validate the entire edit batch before changing any file.
+
+    Input/old-text errors abort without partial changes. Disk I/O failures
+    after preflight are reported, but this is not a filesystem transaction.
 
     edits: list of dicts, each with:
       {"path": "src/App.jsx", "content": "..."} for full file creation/overwrite
@@ -37,7 +37,9 @@ def batch_edit(edits: list) -> str:
     if not edits or not isinstance(edits, list):
         return "Error: edits must be a non-empty list of edit objects."
 
-    applied = []
+    # Evaluate edits against staged content, so two edits to one file retain
+    # their original sequential semantics without an early physical write.
+    staged = {}
     errors = []
 
     for i, edit in enumerate(edits, 1):
@@ -59,39 +61,49 @@ def batch_edit(edits: list) -> str:
         # Case 1: Full content write / creation
         if "content" in edit:
             content_str = edit["content"]
-            try:
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                full_path.write_text(content_str, encoding="utf-8")
-                applied.append(f"  ✓ Created: {path_str} ({len(content_str)} chars)")
-            except Exception as e:
-                errors.append(f"  ✗ {path_str}: failed to write: {e}")
+            if not isinstance(content_str, str):
+                errors.append(f"Edit #{i} ({path_str}): content must be a string")
+                continue
+            staged[full_path] = (content_str, f"  ✓ Created: {path_str} ({len(content_str)} chars)")
 
         # Case 2: Surgical replacement (old_text -> new_text)
         elif "old_text" in edit and "new_text" in edit:
             old_text = edit["old_text"]
             new_text = edit["new_text"]
-
-            if not full_path.exists():
-                # If file doesn't exist, treat new_text as full content
-                try:
-                    full_path.parent.mkdir(parents=True, exist_ok=True)
-                    full_path.write_text(new_text, encoding="utf-8")
-                    applied.append(f"  ✓ Created: {path_str} ({len(new_text)} chars)")
-                except Exception as e:
-                    errors.append(f"  ✗ {path_str}: failed to create: {e}")
-            else:
-                try:
+            if not isinstance(old_text, str) or not isinstance(new_text, str):
+                errors.append(f"Edit #{i} ({path_str}): old_text and new_text must be strings")
+                continue
+            try:
+                if full_path in staged:
+                    orig = staged[full_path][0]
+                elif full_path.exists():
                     orig = full_path.read_text(encoding="utf-8")
-                    if old_text in orig:
-                        updated = orig.replace(old_text, new_text, 1)
-                        full_path.write_text(updated, encoding="utf-8")
-                        applied.append(f"  ✓ Edited: {path_str}")
-                    else:
-                        errors.append(f"  ✗ {path_str}: old_text not found in file")
-                except Exception as e:
-                    errors.append(f"  ✗ {path_str}: failed to edit: {e}")
+                else:
+                    orig = None
+                if orig is None:
+                    staged[full_path] = (new_text, f"  ✓ Created: {path_str} ({len(new_text)} chars)")
+                elif old_text in orig:
+                    staged[full_path] = (orig.replace(old_text, new_text, 1), f"  ✓ Edited: {path_str}")
+                else:
+                    errors.append(f"  ✗ {path_str}: old_text not found in file")
+            except Exception as e:
+                errors.append(f"  ✗ {path_str}: failed to preflight: {e}")
         else:
             errors.append(f"Edit #{i} ({path_str}): must provide 'content' OR 'old_text'+'new_text'")
+
+    # An invalid second edit must never leave the first physically applied.
+    if errors:
+        return "⚠️ ERRORS ({}), batch not applied:\n".format(len(errors)) + "\n".join(errors)
+
+    applied = []
+    for full_path, (content, message) in staged.items():
+        try:
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content, encoding="utf-8")
+            applied.append(message)
+        except Exception as e:
+            errors.append(f"  ✗ {full_path}: failed to write: {e}")
+            break
 
     lines = []
     if applied:
