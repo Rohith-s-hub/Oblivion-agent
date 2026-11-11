@@ -325,7 +325,8 @@ class SimScreen(Screen):
                         self._log(f"[#ff006e]Editor error: {e}[/#ff006e]")
                 self.app.call_from_thread(_upd)
             except Exception as e:
-                def _e(): self._log(f"[#ff006e]Meera error: {e}[/#ff006e]")
+                err = str(e)
+                def _e(): self._log(f"[#ff006e]Meera error: {err}[/#ff006e]")
                 self.app.call_from_thread(_e)
         threading.Thread(target=_ask, daemon=True).start()
 

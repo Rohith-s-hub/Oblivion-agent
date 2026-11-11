@@ -30,7 +30,7 @@ from tools.registry import dispatch
 from tools.diff import make_diff
 from db.store import init_db, create_session, save_message, load_session, list_sessions
 from agent.watcher import FileWatcher
-from agent.models import MODELS, get_current_model_info, check_api_key, list_models_table
+from agent.models import MODELS, get_current_model_info, check_api_key, list_models_table, get_rate_delay
 try:
     from agent.voice import (
         VoiceRecorder, transcribe, get_whisper_model, list_input_devices,
@@ -196,7 +196,7 @@ SLASH_COMMANDS = [
 # ── Auto-extend SLASH_COMMANDS with every model from the registry ──
 # This way new models added to agent/models.py automatically appear in autocomplete
 try:
-    for _mname, _minfo in _MODEL_REGISTRY.items():
+    for _mname, _minfo in MODELS.items():
         _cost = _minfo.get("cost", "")
         _provider = _minfo.get("provider", "")
         _label = f"Switch to {_mname} [{_provider}] {_cost}"[:60]

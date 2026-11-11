@@ -6,7 +6,7 @@ import subprocess
 import json
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import Callable, Optional
 
 
 def get_memory_path() -> Path:
