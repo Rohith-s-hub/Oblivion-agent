@@ -141,6 +141,7 @@ def detect_from_request(user_message: str) -> Set[str]:
         "deployment": ["deploy", "production", "nginx", "vercel", "netlify"],
         "docker":     ["docker", "dockerfile", "compose", "container", "image", "buildkit", "alpine", "dockerignore", "multi-stage"],
         "debugging":  ["debug", "broken", "error", "not working", "refused", "failed", "fix", "404", "blank page", "white screen", "not loading", "cannot read", "page not found", "import error", "typeerror", "syntaxerror", "crash"],
+        "git":        ["git ", "git commit", "git push", "git pull", "merge conflict", "rebase", "branch", "github", "pull request", " pr ", "gitignore", ".gitignore", "git clone", "git init", "detached head", "revert", "cherry-pick", "stash"],
         "security":   ["security", "auth", "authentication", "authorization", "jwt", "oauth", "password", "hash", "bcrypt", "argon2", "csrf", "xss", "sql injection", "owasp", "secret", "token", "vulnerability", "encrypt", "permission", "rbac", "session", "cookie", "cors", "https", "ssl", "tls", "exploit", "attack", "sanitize", "escape"],
         "testing":    ["test", "tests", "pytest", "vitest", "jest", "unit test", "integration test", "fixture", "mock", "coverage", "tdd", "assertion", "spec"],
         "database":   ["sql", "postgres", "postgresql", "sqlite", "alembic", "migration", "index", "query", "n+1", "deadlock", "schema", "table", "jsonb", "foreign key", "transaction"],
@@ -152,6 +153,24 @@ def detect_from_request(user_message: str) -> Set[str]:
             tags.add(tag)
 
     return tags
+
+
+def detect_vanilla_stack_intent(user_message: str) -> bool:
+    """
+    Strict check for explicit 'no framework' requests.
+    Separate from the broad 'webdev' tag above (which fires on bare
+    html/css/js mentions even during React work) — this only fires on
+    unambiguous phrases so it never accidentally overrides a React build.
+    """
+    msg = (user_message or "").lower()
+    vanilla_phrases = [
+        "plain html", "plain javascript", "vanilla javascript", "vanilla js",
+        "no react", "no framework", "without react", "without a framework",
+        "no build tool", "no npm", "just html css", "html css and js",
+        "html, css, and javascript", "html css js", "pure javascript",
+        "pure html", "static html site", "no vite",
+    ]
+    return any(p in msg for p in vanilla_phrases)
 
 
 def describe_stack(tags: Set[str]) -> str:

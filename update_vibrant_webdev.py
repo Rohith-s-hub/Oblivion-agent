@@ -128,6 +128,8 @@ webdev_path.parent.mkdir(parents=True, exist_ok=True)
 webdev_path.write_text(vibrant_webdev_content, encoding="utf-8")
 print("✅ 1. knowledge/packs/webdev.md updated with Vibrant Design System!")
 
+
+
 ── 2. UPDATE AGENT/CORE.PY TO ENFORCE VIBRANT STYLING ─────────────────────
 path_core = BASE / "agent" / "core.py"
 content_core = path_core.read_text(encoding="utf-8")
@@ -140,7 +142,7 @@ VIBRANT DESIGN: Always write a comprehensive styles.css (minimum 1,500+ characte
 PRIORITIZE SUB-PAGES: Generate index.html, about.html, contact.html, and styles.css FIRST before individual blog/project detail pages.
 Use batch_edit to write files in complete chunks so no pages are left missing."""
 if old_rule in content_core:
-content_core = re.sub(
+  content_core = re.sub(
 r'2. **WEBSITE & MULTI-FILE GENERATION.*?(?=\n\n3.)',
 new_rule,
 content_core,
@@ -149,6 +151,6 @@ flags=re.DOTALL
 path_core.write_text(content_core, encoding="utf-8")
 print("✅ 2. agent/core.py updated to enforce Vibrant CSS & Sub-Page Completion!")
 
-Syntax Check
+SyntaxCheck
 ast.parse(open(path_core).read())
 print("✅ agent/core.py syntax PASSED!")

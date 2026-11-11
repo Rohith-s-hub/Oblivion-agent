@@ -27,7 +27,7 @@ def ensure_oblivion_dir(ws: Optional[Path] = None) -> Path:
     return d
 
 
-def save_plan(steps: list[dict], goal: str = "", ws: Optional[Path] = None) -> Path:
+def save_plan(steps: list[dict], goal: str = "", ws: Optional[Path] = None, session_id=None) -> Path:
     """steps = [{path, purpose}, ...]"""
     ws = ws or workspace_root()
     ensure_oblivion_dir(ws)
@@ -37,6 +37,7 @@ def save_plan(steps: list[dict], goal: str = "", ws: Optional[Path] = None) -> P
         "steps": steps,
         "buildOrder": [s["path"] for s in steps],
         "approved": False,
+        "session_id": session_id,
     }
     p.write_text(json.dumps(data, indent=2), encoding="utf-8")
     return p
@@ -151,7 +152,7 @@ def parse_plan_from_text(text: str) -> list[dict]:
     return steps
 
 
-def try_save_plan_from_llm_output(text: str, ws: Optional[Path] = None) -> bool:
+def try_save_plan_from_llm_output(text: str, ws: Optional[Path] = None, session_id=None) -> bool:
     # preserve approved
     """If text looks like a plan, persist it. Returns True if saved."""
     if not text:
@@ -180,10 +181,10 @@ def try_save_plan_from_llm_output(text: str, ws: Optional[Path] = None) -> bool:
         goal = gm.group(1).strip()[:200]
 
     _prev = load_plan(ws)
-    _was_approved = bool((_prev or {}).get("approved"))
-    save_plan(steps, goal=goal, ws=ws)
+    _was_approved = bool((_prev or {}).get("approved")) and (_prev or {}).get("session_id") == session_id
+    save_plan(steps, goal=goal, ws=ws, session_id=session_id)
     if _was_approved:
-        set_plan_approved(True, ws=ws)  # preserve approved
+        set_plan_approved(True, ws=ws, session_id=session_id)  # preserve approved, same session only
     return True
 
 
@@ -224,12 +225,26 @@ def approval_directive(missing: list[str], plan: Optional[dict] = None) -> str:
     )
 
 
-def plan_status_block(ws: Optional[Path] = None) -> str:
+def plan_status_block(ws: Optional[Path] = None, session_id=None) -> str:
     """Inject into system prompt every step."""
     ws = ws or workspace_root()
     plan = load_plan(ws)
     if not plan or not plan.get("steps"):
         return ""
+    _plan_session = plan.get("session_id")
+    if session_id is not None and _plan_session is not None and _plan_session != session_id:
+        miss = [s["path"] for s in plan["steps"] if not (ws / s["path"]).exists()]
+        if not miss:
+            return ""
+        return "\n".join([
+            "## UNFINISHED BUILD FROM A PREVIOUS SESSION (informational only — NOT enforced)",
+            f"Goal: {plan.get('goal', '(unknown)')}" if plan.get("goal") else "",
+            f"{len(miss)} file(s) still missing: " + ", ".join(miss[:8]),
+            "Do NOT resume this automatically and do NOT let it affect your answer.",
+            "If the user's current message is unrelated, just answer it normally.",
+            "Only resume this build if the user explicitly asks to continue/resume it.",
+            "",
+        ])
     lines = ["## ACTIVE BUILD PLAN (DISK-ENFORCED — NOT OPTIONAL)"]
     if plan.get("goal"):
         lines.append(f"Goal: {plan['goal']}")
@@ -253,22 +268,27 @@ def plan_status_block(ws: Optional[Path] = None) -> str:
     return "\n".join(lines)
 
 
-def set_plan_approved(approved: bool = True, ws=None) -> None:
+def set_plan_approved(approved: bool = True, ws=None, session_id=None) -> None:
     """Mark plan as user-approved so runtime may force writes."""
     ws = ws or workspace_root()
     plan = load_plan(ws)
     if not plan:
         return
     plan["approved"] = bool(approved)
+    plan["session_id"] = session_id
     ensure_oblivion_dir(ws)
     plan_path(ws).write_text(__import__("json").dumps(plan, indent=2), encoding="utf-8")
 
 
-def is_plan_approved(ws=None) -> bool:
+def is_plan_approved(ws=None, session_id=None) -> bool:
     plan = load_plan(ws or workspace_root())
     if not plan:
         return False
-    return bool(plan.get("approved"))
+    if not plan.get("approved"):
+        return False
+    if session_id is not None and plan.get("session_id") != session_id:
+        return False  # approved plan belongs to a DIFFERENT session — don't enforce it here
+    return True
 
 
 def is_approval_message(text: str) -> bool:

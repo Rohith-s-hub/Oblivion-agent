@@ -3,6 +3,7 @@ from tools.planner import plan_task
 from tools.bash import run_bash, start_server, list_servers, stop_server
 from tools.edit_file import edit_file, insert_after
 from tools.search_code import search_code
+from tools.web_diagnostics import diagnose_website
 from tools.symbol_tools import find_symbol, list_symbols, find_callers, project_map
 from tools.batch_edit import batch_edit, batch_apply
 from tools.test_runner import run_tests, test_file, detect_test_framework
@@ -47,6 +48,21 @@ TOOL_SCHEMAS = [
         "parameters": {
             "query": {"type": "string", "description": "Natural language search query", "required": True},
             "n_results": {"type": "integer", "description": "Number of results (default 5)", "required": False},
+        },
+    },
+    {
+        "name": "diagnose_website",
+        "description": (
+            "Run automated health checks on the current website project. Catches issues a "
+            "non-technical user cannot describe precisely: HTML classes with no matching CSS "
+            "rule (the #1 cause of 'looks broken/plain'), dead or non-content-aware image "
+            "services (source.unsplash.com, picsum.photos used for named content), and broken "
+            "local file links. CALL THIS FIRST whenever a user reports a vague website problem "
+            "('looks wrong', 'images are off', 'broken', 'doesn't look right') — before asking "
+            "technical questions or guessing at a fix."
+        ),
+        "parameters": {
+            "target_file": {"type": "string", "description": "Optional: limit check to one HTML file (relative path). Leave empty to scan whole workspace.", "required": False},
         },
     },
     {
@@ -480,6 +496,7 @@ def _finish(summary: str = "Task complete.") -> str:
 
 TOOL_FUNCTIONS = {
     "search_code":  search_code,
+    "diagnose_website": diagnose_website,
     "read_file":    read_file,
     "write_file":   write_file,
     "edit_file":    edit_file,

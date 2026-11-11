@@ -12,12 +12,14 @@ from typing import Set, Optional, List
 from knowledge.detector import detect_tech_stack, detect_from_request, describe_stack
 
 PACKS_DIR = Path(__file__).parent / "packs"
-MAX_PACKS = 1  # was 2; cut to reduce prompt bloat  # only top-2 most relevant
+MAX_PACKS = 2  # bumped to allow e.g. debugging + git together
 MAX_PACK_CHARS = 2500  # was 6000; forced summary  # ~1500 tokens per pack
 MAX_TOTAL_CHARS = 3000  # was 12000; cap knowledge injection  # ~3000 tokens of knowledge MAX
 
 PACK_PRIORITY = [
     "debugging",
+    "git",
+    "deployment",
     "database",
     "security",
     "testing",

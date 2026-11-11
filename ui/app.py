@@ -4,6 +4,7 @@ Cyberpunk-themed TUI with slash commands.
 """
 import asyncio
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -100,6 +101,7 @@ SLASH_COMMANDS = [
     ("/meera rate +20%",        "Speech rate (+/- percent)"),
     ("/mcp",                    "MCP Web Connector & status"),
     ("/mcp share",              "⚡ Instant Claude.ai / Web Connector (HTTPS)"),
+    ("/mcp copy",               "📋 Copy token & connector URLs to clipboard"),
     ("/mcp on",                 "Start local MCP SSE server"),
     ("/mcp off",                "Stop MCP server and web tunnel"),
     ("/mcp tier standard",       "Set tier: standard (safe + file edits)"),
@@ -156,6 +158,7 @@ SLASH_COMMANDS = [
     ("/meera rate +20%",        "Speech rate (+/- percent)"),
     ("/mcp",                    "MCP Web Connector & status"),
     ("/mcp share",              "⚡ Instant Claude.ai / Web Connector (HTTPS)"),
+    ("/mcp copy",               "📋 Copy token & connector URLs to clipboard"),
     ("/mcp on",                 "Start local MCP SSE server"),
     ("/mcp off",                "Stop MCP server and web tunnel"),
     ("/mcp tier standard",       "Set tier: standard (safe + file edits)"),
@@ -601,6 +604,7 @@ class OblivionApp(App):
         Binding("ctrl+l", "clear_chat", "Clear"),
         Binding("ctrl+h", "show_help", "Help"),
         Binding("ctrl+t", "toggle_voice", "Talk"),
+        Binding("ctrl+y", "pause_speech", "Pause", priority=True),
         Binding("ctrl+g", "open_history", "History"),
     ]
 
@@ -1164,11 +1168,42 @@ class OblivionApp(App):
         arg = parts[1] if len(parts) > 1 else ""
 
         if command == "/mcp":
-            from mcp_server.manager import get_mcp_status, start_server, start_tunnel, stop_all
-            from rich.panel import Panel
+            from mcp_server.manager import (
+                get_mcp_status, start_server, start_tunnel, stop_all,
+                get_rest_bridge_status, start_rest_bridge, start_rest_tunnel,
+                get_share_summary_text,
+            )
             from rich.table import Table
 
             sub = arg.strip().lower()
+
+            if sub == "copy":
+                text = get_share_summary_text()
+                copied = False
+                try:
+                    self.app.copy_to_clipboard(text)
+                    copied = True
+                except Exception:
+                    pass
+                if not copied:
+                    import subprocess as _sp, shutil as _sh
+                    for tool, args in (
+                        ("wl-copy", ["wl-copy"]),
+                        ("xclip", ["xclip", "-selection", "clipboard"]),
+                        ("xsel", ["xsel", "--clipboard", "--input"]),
+                    ):
+                        if _sh.which(tool):
+                            try:
+                                _sp.run(args, input=text.encode(), check=True)
+                                copied = True
+                                break
+                            except Exception:
+                                pass
+                if copied:
+                    log.write("[#67e8f9]✓ Connector details copied to clipboard.[/#67e8f9]")
+                else:
+                    log.write(Panel(text, title="[#febc2e]Clipboard copy unavailable — copy manually[/#febc2e]", border_style="#3e4560"))
+                return True
 
             if sub in ("off", "stop"):
                 stop_all()
@@ -1188,6 +1223,11 @@ class OblivionApp(App):
                 log.write("[#7b8cde]⚡ Initializing Oblivion Web Connector & HTTPS Tunnel...[/#7b8cde]")
                 st = await asyncio.to_thread(start_server)
                 tun_url = await asyncio.to_thread(start_tunnel, st["port"])
+
+                workspace = os.environ.get("WORKSPACE_DIR") or os.getcwd()
+                log.write("[#7b8cde]⚡ Starting REST bridge for ChatGPT / OpenAPI clients...[/#7b8cde]")
+                await asyncio.to_thread(start_rest_bridge, workspace, 8768, st["token"])
+                rest_url = await asyncio.to_thread(start_rest_tunnel, 8768)
             elif sub in ("on", "start"):
                 st = await asyncio.to_thread(start_server)
             
@@ -1212,15 +1252,19 @@ class OblivionApp(App):
             elif st["running"]:
                 t.add_row("Web Tunnel:", "[dim]Not shared. Run [bold]/mcp share[/bold] to expose for claude.ai[/dim]")
 
+            rest_st = get_rest_bridge_status()
+            if rest_st["tunnel_active"]:
+                t.add_row("REST API:", f"[bold #67e8f9]{rest_st['public_rest_url']}[/bold #67e8f9]")
+                t.add_row("ChatGPT Setup:", "[dim]Paste REST API URL into your GPT Action's servers: field[/dim]")
+
             card_body = t
             title = "[bold #7b8cde]🌐 OBLIVION MCP & WEB CONNECTOR[/bold #7b8cde]"
             log.write(Panel(card_body, title=title, border_style="#7b8cde", subtitle="[dim]/mcp share | /mcp on | /mcp off | /mcp tier[/dim]"))
             return True
 
         if command in ("/addmodel", "/add-model"):
-            from agent.models import MODELS, register_custom_model
+            from agent.models import register_custom_model
             from agent.paths import save_config_key
-            from rich.panel import Panel
 
             parts = arg.strip().split()
             if len(parts) < 2:
@@ -1803,7 +1847,7 @@ class OblivionApp(App):
                     lines.append(
                         f"{marker} [bold {m.get('color', '#7b8cde')}]{m['name']:<15}[/bold {m.get('color', '#7b8cde')}] "
                         f"[#9aa0b8]{m.get('cost', ''):<20}[/#9aa0b8] "
-                        f"[dim]{m['description']}[/dim]{key_status}"
+                        f"[dim]{m.get('description') or m.get('notes') or m.get('label') or ''}[/dim]{key_status}"
                     )
                 lines.append("")
                 lines.append("[dim]Use:[/dim] [#7b8cde]/model <name>[/#7b8cde]  to switch")
@@ -2646,7 +2690,7 @@ class OblivionApp(App):
             if friday.is_enabled():
                 def speak_summary():
                     try:
-                        spoken = content[:200].replace('*','').replace('#','').replace('`','').strip()
+                        spoken = content.strip()
                         if spoken:
                             self.call_from_thread(self._show_friday_speech, spoken)
                             friday.speak(spoken, blocking=True)
@@ -2765,7 +2809,25 @@ class OblivionApp(App):
 
         return await asyncio.to_thread(dispatch, tool_name, args)
 
+    def action_pause_speech(self) -> None:
+        """Ctrl+Y - pause Meera's voice exactly where it is."""
+        try:
+            from agent import friday as _fr
+            if _fr.pause_speaking():
+                self.notify("Paused. Ctrl+R resumes, Ctrl+T to talk.", timeout=4)
+        except Exception:
+            pass
+
     def action_reset(self) -> None:
+        # Ctrl+R doubles as "resume" while Meera's voice is paused
+        try:
+            from agent import friday as _fr
+            if _fr.is_paused():
+                _fr.resume_speaking()
+                self.notify("Resumed.", timeout=2)
+                return
+        except Exception:
+            pass
         self.agent.reset()
         self._clear_activity()
         log = self.query_one("#chat-log", RichLog)
@@ -2967,10 +3029,16 @@ class OblivionApp(App):
             # Stop current recording
             self._stop_voice_recording()
         else:
+            # Silence Meera first (also cancels speech still being prepared)
+            try:
+                from agent import friday as _fr
+                _fr.stop_speaking()
+            except Exception:
+                pass
             # Start new recording
-            self.run_worker(self._start_voice_recording(), exclusive=False)
+            self.run_worker(self._start_voice_recording(manual=True), exclusive=False)
 
-    async def _start_voice_recording(self):
+    async def _start_voice_recording(self, manual: bool = False):
         """Ctrl+T / wake -> exclusive mic record -> fast STT."""
         log = self.query_one("#chat-log", RichLog)
 
@@ -3020,7 +3088,7 @@ class OblivionApp(App):
                         pass
                 threading.Thread(target=watch_stop, daemon=True).start()
 
-                audio = recorder.record()
+                audio = recorder.record(manual_stop=manual)
 
                 def _mark_tx():
                     self.voice_recording = False

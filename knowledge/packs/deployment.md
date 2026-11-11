@@ -1,72 +1,58 @@
-# Deployment Knowledge Pack
+# Deployment & Hosting Knowledge Pack
 
-## CRITICAL: Production Build vs Dev Server
+## Static Sites / React-Vite Frontends
 
-NEVER ship npm run dev to production. Always:
+### Vercel (recommended default for React/Vite/Next.js)
+1. Push code to GitHub.
+2. Import the repo at vercel.com — auto-detects Vite/Next.js/React.
+3. Build command: `npm run build` (Vite) — output dir: `dist`.
+4. Env vars: set in Vercel dashboard → Settings → Environment Variables. For Vite, they MUST be prefixed `VITE_` to be exposed to the client.
+5. Auto-deploys on every push to `main`; PR previews on every branch.
 
-    npm run build        # produces /dist or /.next
-    npm run preview      # Vite - preview prod build locally
-    npm run start        # Next.js - runs production server
+### Netlify (equally solid alternative)
+- Build command: `npm run build`, publish directory: `dist` (Vite) or `build` (CRA).
+- `netlify.toml` for redirects (needed for client-side routing / React Router):
+```toml
+  [[redirects]]
+    from = "/*"
+    to = "/index.html"
+    status = 200
+```
+  Without this, refreshing any non-root route (e.g. `/about`) 404s.
 
-## Static Site Hosts (No Server Needed)
+### GitHub Pages (free, good for portfolios/static-only, no server-side)
+    npm run build
+    # then push the `dist` folder to a `gh-pages` branch, or use:
+    npm install -D gh-pages
+    # add to package.json scripts: "deploy": "gh-pages -d dist"
+    npm run deploy
+- Vite apps need `base: '/<repo-name>/'` in `vite.config.js` if deployed to `username.github.io/repo-name` (not needed for a custom domain or `username.github.io` root repo).
 
-For Vite/React/Vue static builds:
-- Vercel - vercel deploy (auto-detects framework)
-- Netlify - drop /dist folder or connect Git
-- Cloudflare Pages - connect Git, build: npm run build, output: dist
-- GitHub Pages - npm run build, push /dist to gh-pages branch
+## Backend / Full-Stack Hosting
 
-## Full-Stack Hosts
+### Render / Railway (simple Node/Python backend hosting)
+- Connect GitHub repo, set build + start commands (e.g. `npm install` / `npm start`, or `pip install -r requirements.txt` / `uvicorn main:app`).
+- Set env vars in the dashboard — never commit `.env` to the repo.
+- Free tiers often spin down on inactivity — first request after idle is slow (cold start).
 
-- Vercel - Next.js (best fit), full-stack
-- Railway - easy Postgres + apps
-- Fly.io - Docker-based, edge locations
-- Render - easy free tier
-- Cloudflare Workers - edge functions
+### Docker-based deployment (any VPS / cloud provider)
+- If a Dockerfile exists, most platforms (Render, Railway, Fly.io, AWS) can build directly from it — no need to duplicate build config.
+- Basic flow: `docker build -t app .` → `docker run -p 8080:8080 app` locally to verify before pushing.
 
-## Environment Variables in Production
+## Environment Variables (cross-cutting)
+- NEVER commit `.env` — confirm it's in `.gitignore` before first commit.
+- Client-exposed vars (Vite: `VITE_*`, Next.js: `NEXT_PUBLIC_*`) are PUBLIC — never put secrets there, only public config (API base URLs, feature flags).
+- True secrets (API keys, DB passwords) belong ONLY in the hosting platform's dashboard/env settings, read server-side.
 
-NEVER commit secrets to git. Use:
+## Custom Domains
+- Add domain in the hosting platform's dashboard.
+- Point DNS: either an `A` record to the platform's IP, or a `CNAME` to the platform's provided hostname (most modern platforms use CNAME).
+- Propagation can take up to 24-48h; use `dig <domain>` or `nslookup <domain>` to check current DNS resolution while waiting.
 
-    # .env.local (gitignored)
-    DATABASE_URL=postgresql://...
-    API_KEY=sk_live_...
-
-Then on host:
-- Vercel: Settings -> Environment Variables
-- Railway: Variables tab
-- Fly.io: fly secrets set DATABASE_URL=...
-
-## nginx Config for SPA (React/Vue)
-
-    server {
-      listen 80;
-      server_name myapp.com;
-      root /usr/share/nginx/html;
-      index index.html;
-
-      location / {
-        try_files $uri $uri/ /index.html;
-      }
-
-      location /api/ {
-        proxy_pass http://backend:8000/;
-        proxy_set_header Host $host;
-      }
-    }
-
-The try_files line is CRITICAL for SPAs - without it, refresh on /about gives 404.
-
-## Docker for React/Vue (multi-stage)
-
-    FROM node:20-alpine AS builder
-    WORKDIR /app
-    COPY package*.json ./
-    RUN npm ci
-    COPY . .
-    RUN npm run build
-
-    FROM nginx:alpine
-    COPY --from=builder /app/dist /usr/share/nginx/html
-    EXPOSE 80
-    CMD ["nginx", "-g", "daemon off;"]
+## "Works locally but broken when deployed" — Diagnosis Checklist
+1. **Blank page / white screen** → open browser devtools console on the LIVE site (not local) — almost always a JS error or a wrong asset path.
+2. **404 on page refresh for non-root routes** → missing SPA redirect rule (see Netlify config above) — the host is looking for a real file at that path instead of serving `index.html`.
+3. **API calls failing (CORS/network error)** → the deployed frontend is likely calling `localhost:xxxx` instead of the deployed backend URL — check env vars actually got set on the HOSTING platform, not just locally.
+4. **"process is not defined" or similar in browser** → Node-only code leaked into client bundle — check for accidental use of `process.env` instead of `import.meta.env` (Vite) in client code.
+5. **Build succeeds locally, fails on host** → check Node version mismatch — pin it via `.nvmrc` or the platform's Node-version setting; also check for case-sensitivity bugs (macOS/Windows filesystems are case-insensitive, Linux hosts are not — `import './Button'` vs actual file `button.jsx` breaks only in prod).
+6. **Env var seemingly "not working"** → for Vite/CRA-style tools, env vars are baked in at BUILD time, not read at runtime — changing them requires a rebuild/redeploy, not just a server restart.

@@ -207,6 +207,10 @@ def register_custom_model(short_name: str, model_id: str, label: str = "Custom M
     entry = {
         "id": model_id,
         "label": label,
+        "description": f"{label} ({provider})",
+        "cost": "Custom",
+        "speed": "dynamic",
+        "color": "#9aa0b8",
         "latency": "dynamic",
         "notes": f"Added via /addmodel ({provider})",
         "provider": provider,

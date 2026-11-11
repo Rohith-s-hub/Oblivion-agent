@@ -34,6 +34,8 @@ load_config_env()
 _proc_lock = threading.Lock()
 _current_proc: Optional[subprocess.Popen] = None
 _on_speech_done_callback: Optional[Callable[[str], None]] = None
+_PAUSED = False   # True while the voice is frozen by pause_speaking()
+_SPEECH_GEN = 0   # bumped by stop_speaking(); cancels speech still being prepared
 
 # Voice persona mapping for Edge TTS
 VOICE_PERSONAS = {
@@ -195,14 +197,62 @@ async def _synth_edge_async(text: str, output_path: str):
     await communicate.save(output_path)
 
 
+_OFFLINE_USED = False  # True when the last synthesis used the offline voice
+
+
+def _synth_piper(text: str, output_path: str) -> bool:
+    """Offline neural voice via Piper (clear and natural). Writes WAV data."""
+    import subprocess as _sp
+    exe = os.getenv("FRIDAY_PIPER_BIN", os.path.expanduser("~/piper/venv/bin/piper"))
+    model = os.getenv("FRIDAY_PIPER_MODEL", os.path.expanduser("~/piper/voices/en_US-amy-medium.onnx"))
+    if not (os.path.exists(exe) and os.path.exists(model)):
+        return False
+    try:
+        _sp.run(
+            [exe, "-m", model, "--output_file", output_path],
+            input=text.encode("utf-8"), check=True, capture_output=True, timeout=60,
+        )
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 100
+    except Exception as e:
+        print(f"MEERA: piper voice error: {e}")
+        return False
+
+
+def _synth_offline(text: str, output_path: str) -> bool:
+    """Offline female voice via espeak-ng (no internet needed). Writes WAV data."""
+    import shutil as _shutil
+    import subprocess as _sp
+    if _synth_piper(text, output_path):
+        return True
+    exe = _shutil.which("espeak-ng") or _shutil.which("espeak")
+    if not exe:
+        print("MEERA: offline voice unavailable (sudo apt install espeak-ng)")
+        return False
+    voice = os.getenv("FRIDAY_OFFLINE_VOICE", "en-us+f3")
+    speed = os.getenv("FRIDAY_OFFLINE_SPEED", "155")
+    try:
+        _sp.run(
+            [exe, "-v", voice, "-s", speed, "-w", output_path, text],
+            check=True, capture_output=True, timeout=30,
+        )
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 100
+    except Exception as e:
+        print(f"MEERA: offline voice error: {e}")
+        return False
+
+
 def _synth_edge(text: str, output_path: str) -> bool:
-    """Synthesize text to audio via Microsoft Edge Neural TTS."""
+    """Synthesize via Microsoft Edge Neural TTS; fall back to offline voice if it fails."""
+    global _OFFLINE_USED
     try:
         asyncio.run(_synth_edge_async(text, output_path))
+        _OFFLINE_USED = False
         return True
     except Exception as e:
-        print(f"MEERA: Edge TTS error: {e}")
-        return False
+        print(f"MEERA: Edge TTS error: {e} -- using offline voice")
+        ok = _synth_offline(text, output_path)
+        _OFFLINE_USED = ok
+        return ok
 
 
 # ── Text Cleaning & Normalization ────────────────────────────────────────────
@@ -229,6 +279,83 @@ def clean_for_speech(text: str) -> str:
 
 
 # ── Smart Speech Classifier (Fast Local Summary) ─────────────────────────────
+
+def _looks_like_listing(block: str) -> bool:
+    """True if a fenced block is just a list of names (files/folders), not code."""
+    lines = [l.strip() for l in block.splitlines() if l.strip()]
+    if not lines or len(lines) > 40:
+        return False
+    for l in lines:
+        if len(l) > 90:
+            return False
+        if re.search(r"[{};=<>]|\)\s*:|\bdef\b|\bimport\b|\breturn\b|\bfunction\b", l):
+            return False
+    return True
+
+
+def prepare_spoken_reply(text: str, name: str = "") -> str:
+    """
+    Turn a full chat reply into natural speech.
+    - Plans and file-write results: short acknowledgement only.
+    - Everything else (answers, explanations, file listings): read in full,
+      with a pause after every line, never cut mid-sentence.
+    - Real code blocks: replaced by a short pointer to the screen.
+    """
+    if not text or not text.strip():
+        return ""
+    name = name or get_name()
+    raw = text.strip()
+
+    # Plans: acknowledge only
+    if "PROJECT PLAN" in raw or "Approve this plan" in raw or "PLAN:" in raw:
+        steps = len(re.findall(r"^\s*\d+[.)]\s", raw, flags=re.MULTILINE))
+        if steps:
+            return f"The plan is ready, {name}. It has {steps} steps. Shall I go ahead?"
+        return f"The plan is ready on your screen, {name}. Shall I go ahead?"
+
+    # File-write results: acknowledge only
+    if re.search(r"✓\s*(?:Created|Modified)", raw):
+        m = re.search(r"Summary:\s*(.+)", raw)
+        tail = (" " + m.group(1).strip()) if m else ""
+        return clean_for_speech(f"Done, {name}. The files are written.{tail}")
+
+    # Fenced blocks: keep file listings, replace real code with a pointer
+    def _fence(m):
+        block = m.group(1)
+        if _looks_like_listing(block):
+            return "\n" + block + "\n"
+        return "\nThe code is on your screen.\n"
+
+    raw = re.sub(r"```[^\n]*\n([\s\S]*?)```", _fence, raw)
+    raw = re.sub(r"(The code is on your screen\.\s*){2,}", "The code is on your screen. ", raw)
+
+    # One sentence per line so the voice pauses between list items
+    out = []
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        s = re.sub(r"^(?:#{1,6}\s*|[-*+•]\s+|>\s*)", "", s)
+        if not s:
+            continue
+        if s.endswith(":"):
+            s = s[:-1] + "."
+        elif s[-1] not in ".!?,;":
+            s += "."
+        out.append(s)
+
+    spoken = clean_for_speech(" ".join(out)).replace("_", " ")
+
+    # Generous cap, always ending on a full sentence
+    limit = int(os.getenv("FRIDAY_MAX_SPOKEN_CHARS", "2500"))
+    if len(spoken) > limit:
+        cut = spoken[:limit]
+        end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+        if end > limit * 0.5:
+            cut = cut[: end + 1]
+        spoken = cut.rstrip() + " The rest is on your screen."
+    return spoken
+
 
 def _smart_local_summary(text: str, name: str) -> str:
     """
@@ -293,7 +420,7 @@ def summarize_for_speech(text: str, llm_client=None) -> str:
 
     use_llm = os.getenv("FRIDAY_USE_LLM_REWRITE", "false").lower() == "true"
     if not use_llm or llm_client is None:
-        return _smart_local_summary(raw, name)
+        return prepare_spoken_reply(raw, name)
 
     # Optional slow LLM rewrite path if explicitly enabled
     try:
@@ -331,6 +458,7 @@ def speak(text: str, blocking: bool = False, auto_summarize: bool = True) -> Opt
     def _do_speak():
         global _current_proc
         stop_speaking()  # Kill any currently playing audio so voices never overlap
+        _my_gen = _SPEECH_GEN  # changes if the user stops speech while it is being prepared
         if not _ensure_player():
             print("MEERA: ffplay not found. Install: sudo apt install ffmpeg")
             return
@@ -357,7 +485,7 @@ def speak(text: str, blocking: bool = False, auto_summarize: bool = True) -> Opt
                 else:
                     success = _synth_edge(final_text, tmp_path)
                 # Cache short phrases for next time (greetings, yes boss, etc.)
-                if success and len(final_text) <= 120 and provider != "elevenlabs":
+                if success and len(final_text) <= 120 and provider != "elevenlabs" and not _OFFLINE_USED:
                     try:
                         import shutil as _sh
                         _sh.copyfile(tmp_path, cached)
@@ -368,6 +496,8 @@ def speak(text: str, blocking: bool = False, auto_summarize: bool = True) -> Opt
                 return
 
             # Play audio via ffplay (-probesize tiny = faster start)
+            if _my_gen != _SPEECH_GEN:
+                return  # stopped before playback began
             with _proc_lock:
                 _current_proc = subprocess.Popen(
                     [
@@ -385,7 +515,7 @@ def speak(text: str, blocking: bool = False, auto_summarize: bool = True) -> Opt
                     _current_proc = None
 
                 # Trigger speech-completion callback (e.g. auto-mic for questions)
-                if _on_speech_done_callback:
+                if _on_speech_done_callback and _my_gen == _SPEECH_GEN:
                     try:
                         _on_speech_done_callback(final_text)
                     except Exception:
@@ -409,16 +539,56 @@ def speak(text: str, blocking: bool = False, auto_summarize: bool = True) -> Opt
     return t
 
 
-def stop_speaking():
-    """Immediately terminate any currently playing TTS speech."""
-    global _current_proc
+def pause_speaking() -> bool:
+    """Freeze the voice exactly where it is. True if something was paused."""
+    global _PAUSED
+    import signal as _signal
     with _proc_lock:
+        if _current_proc is None or _PAUSED or _current_proc.poll() is not None:
+            return False
+        try:
+            _current_proc.send_signal(_signal.SIGSTOP)
+            _PAUSED = True
+            return True
+        except Exception:
+            return False
+
+
+def resume_speaking() -> bool:
+    """Continue a paused voice from the same spot. True if something was resumed."""
+    global _PAUSED
+    import signal as _signal
+    with _proc_lock:
+        if _current_proc is None or not _PAUSED:
+            _PAUSED = False
+            return False
+        try:
+            _current_proc.send_signal(_signal.SIGCONT)
+            _PAUSED = False
+            return True
+        except Exception:
+            return False
+
+
+def is_paused() -> bool:
+    return _PAUSED
+
+
+def stop_speaking():
+    """Immediately stop any speech: playing, paused, or still being prepared."""
+    global _current_proc, _PAUSED, _SPEECH_GEN
+    import signal as _signal
+    with _proc_lock:
+        _SPEECH_GEN += 1  # cancels speech that is still being synthesized
         if _current_proc is not None:
             try:
+                if _PAUSED:
+                    _current_proc.send_signal(_signal.SIGCONT)  # a frozen process must wake up to exit
                 _current_proc.terminate()
             except Exception:
                 pass
             _current_proc = None
+        _PAUSED = False
 
 
 def get_elevenlabs_quota() -> Optional[dict]:

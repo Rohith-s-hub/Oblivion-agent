@@ -29,6 +29,7 @@ TOOL_TIERS = {
     "project_map": "read",
     "recall": "read",
     "verify_code": "read",
+    "diagnose_website": "read",
     "list_servers": "read",
     "plan_task": "read",
     # Git read tools

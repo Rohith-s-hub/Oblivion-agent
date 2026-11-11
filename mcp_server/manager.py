@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+from shutil import which as shutil_which
 import threading
 import time
 from pathlib import Path
@@ -171,6 +172,7 @@ def start_tunnel(port: int = 8767, timeout: float = 6.0) -> str | None:
 
 
 def stop_all() -> None:
+    stop_rest_bridge()
     with _LOCK:
         if _STATE["tunnel_process"]:
             try:
@@ -194,3 +196,174 @@ def stop_all() -> None:
             subprocess.run(["fuser", "-k", f"{_STATE['port']}/tcp"], capture_output=True)
         except Exception:
             pass
+
+
+# ── REST Bridge (ChatGPT Actions / OpenAPI clients) ────────────────────────
+_STATE.setdefault("rest_process", None)
+_STATE.setdefault("rest_tunnel_process", None)
+_STATE.setdefault("rest_port", 8768)
+_STATE.setdefault("rest_tunnel_url", None)
+
+
+def get_rest_bridge_status() -> dict[str, Any]:
+    with _LOCK:
+        proc = _STATE["rest_process"]
+        alive = proc is not None and proc.poll() is None
+
+        tproc = _STATE["rest_tunnel_process"]
+        talive = tproc is not None and tproc.poll() is None
+
+        if not talive:
+            _STATE["rest_tunnel_url"] = None
+
+        return {
+            "running": alive,
+            "port": _STATE["rest_port"],
+            "tunnel_active": talive and _STATE["rest_tunnel_url"] is not None,
+            "tunnel_url": _STATE["rest_tunnel_url"],
+            "local_rest_url": f"http://127.0.0.1:{_STATE['rest_port']}" if alive else None,
+            "public_rest_url": _STATE["rest_tunnel_url"],
+        }
+
+
+def start_rest_bridge(workspace: str, port: int = 8768, token: str | None = None) -> dict[str, Any]:
+    with _LOCK:
+        if _STATE["rest_process"] and _STATE["rest_process"].poll() is None:
+            return get_rest_bridge_status()
+
+        try:
+            subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True)
+            time.sleep(0.3)
+        except Exception:
+            pass
+
+        tok = token or _STATE.get("token") or get_or_create_token(None)
+        _STATE["rest_port"] = port
+
+        py_bin = sys.executable
+        agent_dir = str(Path(__file__).resolve().parent.parent)
+
+        env = os.environ.copy()
+        env["WORKSPACE_DIR"] = workspace
+        env["OBLIVION_AUTH_TOKEN"] = tok
+
+        cmd = [
+            py_bin, "-m", "uvicorn",
+            "mcp_server.rest_shim:app",
+            "--host", "127.0.0.1",
+            "--port", str(port),
+        ]
+
+        proc = subprocess.Popen(
+            cmd,
+            cwd=agent_dir,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        _STATE["rest_process"] = proc
+        time.sleep(0.7)
+
+    return get_rest_bridge_status()
+
+
+NGROK_STATIC_DOMAIN = "craziness-yeah-shakily.ngrok-free.dev"
+
+
+def start_rest_tunnel(port: int = 8768, timeout: float = 10.0) -> str | None:
+    with _LOCK:
+        if _STATE["rest_tunnel_process"] and _STATE["rest_tunnel_process"].poll() is None:
+            if _STATE["rest_tunnel_url"]:
+                return _STATE["rest_tunnel_url"]
+
+        ngrok_bin = shutil_which("ngrok") or "ngrok"
+
+        cmd = [ngrok_bin, "http", str(port), f"--domain={NGROK_STATIC_DOMAIN}",
+               "--traffic-policy-file=ngrok-policy.yml"]
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+        _STATE["rest_tunnel_process"] = proc
+
+    try:
+        os.set_blocking(proc.stdout.fileno(), False)
+    except Exception:
+        pass
+
+    # Domain is fixed, so we just need to confirm ngrok actually established
+    # the session before handing back the URL — poll its local status API.
+    found_url = None
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            break
+        try:
+            resp = subprocess.run(
+                ["curl", "-s", "http://127.0.0.1:4040/api/tunnels"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if resp.returncode == 0 and f"https://{NGROK_STATIC_DOMAIN}" in resp.stdout:
+                found_url = f"https://{NGROK_STATIC_DOMAIN}"
+                break
+        except Exception:
+            pass
+        time.sleep(0.3)
+
+    with _LOCK:
+        _STATE["rest_tunnel_url"] = found_url
+
+    return found_url
+
+
+def stop_rest_bridge() -> None:
+    with _LOCK:
+        if _STATE["rest_tunnel_process"]:
+            proc = _STATE["rest_tunnel_process"]
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+            _STATE["rest_tunnel_process"] = None
+            _STATE["rest_tunnel_url"] = None
+
+        if _STATE["rest_process"]:
+            proc = _STATE["rest_process"]
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+            _STATE["rest_process"] = None
+
+        try:
+            subprocess.run(["fuser", "-k", f"{_STATE['rest_port']}/tcp"], capture_output=True)
+        except Exception:
+            pass
+
+
+def get_share_summary_text() -> str:
+    """Plain-text block of connector details, for clipboard copy."""
+    st = get_mcp_status()
+    rest_st = get_rest_bridge_status()
+    lines = []
+    if st.get("token"):
+        lines.append(f"Auth Token: {st['token']}")
+    if st.get("web_connector_url"):
+        lines.append(f"Web Connector (Claude/SSE): {st['web_connector_url']}")
+    if rest_st.get("public_rest_url"):
+        lines.append(f"REST API (ChatGPT Actions): {rest_st['public_rest_url']}")
+    return "\n".join(lines) if lines else "Nothing to copy yet. Run /mcp share first."

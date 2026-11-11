@@ -127,7 +127,7 @@ class VoiceRecorder:
     def stop(self):
         self._stop_flag.set()
 
-    def record(self):
+    def record(self, manual_stop: bool = False):
         if not VOICE_AVAILABLE:
             raise RuntimeError("Voice not installed")
 
@@ -138,6 +138,9 @@ class VoiceRecorder:
         chunk_s = 0.1
         chunk_frames = int(SAMPLE_RATE * chunk_s)
         max_chunks = int(MAX_RECORD_SECONDS / chunk_s)
+        if manual_stop:
+            # Ctrl+T mode: keep recording until the user presses Ctrl+T again
+            max_chunks = int(float(os.getenv("VOICE_MANUAL_MAX_SECONDS", "300")) / chunk_s)
         min_chunks = int(MIN_RECORD_SECONDS / chunk_s)
         silence_needed = max(1, int(SILENCE_DURATION / chunk_s))
 
@@ -196,7 +199,7 @@ class VoiceRecorder:
                 else:
                     silence_run += 1
 
-                if i >= min_chunks and has_spoken and silence_run >= silence_needed:
+                if (not manual_stop) and i >= min_chunks and has_spoken and silence_run >= silence_needed:
                     break
 
             self.on_status("stopped")
@@ -211,7 +214,7 @@ class VoiceRecorder:
             _mic_lock.release()
 
     def record_until_stopped(self):
-        return self.record()
+        return self.record(manual_stop=True)
 
 
 def transcribe(audio, language: str = "en") -> str:

@@ -68,6 +68,27 @@ def parse_and_save_plan(text: str, workspace_path: Path) -> bool:
     return False
 
 
+def _looks_truncated(text: str) -> bool:
+    """Heuristic: does this look like a tool-call JSON that got cut off
+    mid-generation (hit max_tokens) rather than the model just not
+    attempting a tool call at all?"""
+    if not text or ("ACTION:" not in text and '"tool"' not in text):
+        return False
+    tail = text[-200:]
+    opens = text.count("{")
+    closes = text.count("}")
+    sq_open = text.count("[")
+    sq_close = text.count("]")
+    # unterminated string: odd number of unescaped double-quotes
+    import re as _re
+    quote_count = len(_re.findall(r'(?<!\\)"', text))
+    odd_quotes = (quote_count % 2) == 1
+    unbalanced = (opens != closes) or (sq_open != sq_close)
+    # doesn't end on a sane closing char
+    bad_ending = not tail.rstrip().endswith(("}", "]", '"'))
+    return odd_quotes or unbalanced or bad_ending
+
+
 def _summarize_conversation(conversation: list, keep_recent: int = 4) -> list:
     if len(conversation) <= keep_recent + 1:
         return conversation
@@ -138,6 +159,7 @@ class AgentRuntime:
     def __init__(self, agent, session_id: int, max_iterations: int = 40):
         self.agent = agent
         self.session_id = session_id
+        self.agent.session_id = session_id  # so system-prompt building can scope plan_status_block()
         self.max_iterations = max_iterations
         self.session_state = {"auto_mode": False, "trusted_tools": set()}
 
@@ -166,9 +188,9 @@ class AgentRuntime:
                 _ws = workspace_root()
                 for _m in reversed(self.agent.conversation):
                     if _m.get("role") == "assistant":
-                        try_save_plan_from_llm_output(_m.get("content") or "", _ws)
+                        try_save_plan_from_llm_output(_m.get("content") or "", _ws, session_id=self.session_id)
                         break
-                set_plan_approved(True, _ws)
+                set_plan_approved(True, _ws, session_id=self.session_id)
                 self._force_tool_strikes = 0
                 self._session_write_count = 0
                 _miss = missing_files(_ws)
@@ -349,14 +371,14 @@ class AgentRuntime:
             # Missing planned files => model MUST call batch_edit/write_file.
             try:
                 _ws_ft = workspace_root()
-                try_save_plan_from_llm_output(llm_output or "", _ws_ft)
+                try_save_plan_from_llm_output(llm_output or "", _ws_ft, session_id=self.session_id)
                 _miss_ft = missing_files(_ws_ft)
             except Exception:
                 _miss_ft = []
 
-            # Only force writes AFTER user approved the plan (said yes).
+            # Only force writes AFTER user approved the plan (said yes) IN THIS SESSION.
             # Plan-only turns must be allowed to FINAL_ANSWER without tools.
-            if _miss_ft and is_plan_approved(_ws_ft):
+            if _miss_ft and is_plan_approved(_ws_ft, session_id=self.session_id):
                 from agent.parser import ToolCall as _TC
                 _is_write = False
                 if isinstance(parsed, _TC):
@@ -367,6 +389,22 @@ class AgentRuntime:
                     if not hasattr(self, "_force_tool_strikes"):
                         self._force_tool_strikes = 0
                     self._force_tool_strikes += 1
+
+                    # DIAGNOSTIC: log the raw model output that got rejected,
+                    # so we can see WHY it wasn't classified as a write call.
+                    try:
+                        _raw_text = llm_output if isinstance(llm_output, str) else getattr(llm_output, "content", str(llm_output))
+                        _log_event(self.session_id, "force_tool_reject_raw", {
+                            "step": step,
+                            "strike": self._force_tool_strikes,
+                            "raw_output": _raw_text[:2000],
+                            "parsed_type": type(parsed).__name__,
+                        })
+                    except Exception as _e:
+                        try:
+                            _log_event(self.session_id, "force_tool_reject_raw_error", {"error": str(_e)})
+                        except Exception:
+                            pass
                     _next = _miss_ft[0]
                     _batch = ", ".join(_miss_ft[:3])
                     _rest = ", ".join(_miss_ft)
@@ -380,19 +418,37 @@ class AgentRuntime:
                     except Exception:
                         pass
 
-                    _msg = "\n".join([
-                        "SYSTEM REJECT: No file-write tool call detected.",
-                        "Disk still missing %d planned file(s)." % len(_miss_ft),
-                        "You MUST reply in EXACTLY this format:",
-                        "",
-                        "THOUGHT: writing next files",
-                        'ACTION: {"tool": "batch_edit", "args": {"edits": [{"path": "%s", "content": "<full file source>"}]}}' % _next,
-                        "",
-                        "Write these NOW (2-3 per batch): %s" % _batch,
-                        "All remaining: %s" % _rest,
-                        "FORBIDDEN: FINAL_ANSWER, plain English only, markdown without ACTION.",
-                        "Strike %d/8." % self._force_tool_strikes,
-                    ])
+                    _raw_for_check = llm_output if isinstance(llm_output, str) else str(llm_output)
+                    if _looks_truncated(_raw_for_check):
+                        _log_event(self.session_id, "force_tool_reject_truncated", {
+                            "step": step, "strike": self._force_tool_strikes,
+                        })
+                        _msg = "\n".join([
+                            "SYSTEM REJECT: Your last response was CUT OFF before finishing",
+                            "(it hit the output token limit mid-file, so the JSON never closed).",
+                            "Disk still missing %d planned file(s)." % len(_miss_ft),
+                            "Write ONLY ONE file this time, and keep it concise:",
+                            "",
+                            "THOUGHT: writing next file",
+                            'ACTION: {"tool": "batch_edit", "args": {"edits": [{"path": "%s", "content": "<full file source, kept short>"}]}}' % _next,
+                            "",
+                            "Do NOT batch multiple files. Do NOT repeat the previous output.",
+                            "Strike %d/8." % self._force_tool_strikes,
+                        ])
+                    else:
+                        _msg = "\n".join([
+                            "SYSTEM REJECT: No file-write tool call detected.",
+                            "Disk still missing %d planned file(s)." % len(_miss_ft),
+                            "You MUST reply in EXACTLY this format:",
+                            "",
+                            "THOUGHT: writing next files",
+                            'ACTION: {"tool": "batch_edit", "args": {"edits": [{"path": "%s", "content": "<full file source>"}]}}' % _next,
+                            "",
+                            "Write these NOW (2-3 per batch): %s" % _batch,
+                            "All remaining: %s" % _rest,
+                            "FORBIDDEN: FINAL_ANSWER, plain English only, markdown without ACTION.",
+                            "Strike %d/8." % self._force_tool_strikes,
+                        ])
 
                     if self.agent.conversation and self.agent.conversation[-1].get("role") == "assistant":
                         self.agent.conversation.pop()
@@ -421,17 +477,52 @@ class AgentRuntime:
 
             # Final Answer verification
             if isinstance(parsed, FinalAnswer):
+                # ═══ WEB DIAGNOSTIC GATE ═══════════════════════════════════
+                # If this is a web project (has .html files), verify the model's
+                # claimed fix actually holds — re-run diagnose_website() ourselves
+                # rather than trusting the model's own claim of success.
+                try:
+                    _ws_web = workspace_root()
+                    _ws_web_path = Path(_ws_web)
+                    _has_html = any(_ws_web_path.rglob("*.html"))
+                    if _has_html:
+                        from tools.web_diagnostics import diagnose_website
+                        _diag_report = diagnose_website()
+                        if "CRITICAL" in _diag_report:
+                            _log_event(self.session_id, "web_diagnostic_gate_blocked", {
+                                "report_excerpt": _diag_report[:500],
+                            })
+                            self.agent.conversation.append({
+                                "role": "user",
+                                "content": (
+                                    "SYSTEM REJECT — WEB DIAGNOSTIC STILL FAILING.\n"
+                                    "You claimed the website was fixed, but re-running diagnose_website() "
+                                    "shows unresolved issues:\n\n"
+                                    f"{_diag_report}\n\n"
+                                    "Do NOT claim success again until you have fixed EVERY item listed above. "
+                                    "Read the exact class names/files named in the report and add the missing "
+                                    "CSS rules directly — do not redesign or invent a different class scheme."
+                                ),
+                            })
+                            continue
+                except Exception as _wd_err:
+                    try:
+                        _log_event(self.session_id, "web_diagnostic_gate_err", {"err": str(_wd_err)})
+                    except Exception:
+                        pass
+                # ═══ END WEB DIAGNOSTIC GATE ═══════════════════════════════
+
                 # NUCLEAR ANTI-HALLUCINATION GATE
                 try:
                     _ws = workspace_root()
-                    try_save_plan_from_llm_output(getattr(parsed, "content", "") or "", _ws)
+                    try_save_plan_from_llm_output(getattr(parsed, "content", "") or "", _ws, session_id=self.session_id)
                     _plan = load_plan(_ws)
                     _miss = missing_files(_ws) if _plan else []
                     _have = existing_planned_files(_ws) if _plan else []
                     _writes = getattr(self, "_session_write_count", 0)
                     _content = getattr(parsed, "content", "") or ""
                     _claims = claims_files_created(_content)
-                    _approved = is_plan_approved(_ws) if _plan else False
+                    _approved = is_plan_approved(_ws, session_id=self.session_id) if _plan else False
 
                     if _claims and _writes < 1 and (_miss or not _have):
                         _log_event(self.session_id, "hallucination_no_writes", {
@@ -475,10 +566,10 @@ class AgentRuntime:
                 # ═══ HARD DISK GATE — no hallucinated complete ═══
                 try:
                     _ws = workspace_root()
-                    try_save_plan_from_llm_output(getattr(parsed, "content", None) or llm_output or "", _ws)
+                    try_save_plan_from_llm_output(getattr(parsed, "content", None) or llm_output or "", _ws, session_id=self.session_id)
                     _miss = missing_files(_ws)
                     _have = existing_planned_files(_ws)
-                    if _miss and not is_plan_approved(_ws):
+                    if _miss and not is_plan_approved(_ws, session_id=self.session_id):
                         _miss = []
                     if _miss:
                         _log_event(self.session_id, "final_answer_blocked_missing", {"missing": _miss, "have": _have})
